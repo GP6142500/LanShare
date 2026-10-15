@@ -208,6 +208,10 @@ impl AppState {
             cfg.password = password.clone();
             let p = PathBuf::from(&storage_dir);
             if p.is_absolute() {
+                // 目录不存在则创建（失败时忽略，上传阶段会再次确保并报错）
+                if !p.exists() {
+                    let _ = std::fs::create_dir_all(&p);
+                }
                 cfg.storage_dir = p;
             }
             save_config(&cfg);
@@ -232,8 +236,8 @@ fn config_dir() -> PathBuf {
 
 fn default_storage() -> PathBuf {
     std::env::var("USERPROFILE")
-        .map(|p| PathBuf::from(p).join("Downloads"))
-        .unwrap_or_else(|_| PathBuf::from(r"C:\Users\高鹏\Downloads"))
+        .map(|p| PathBuf::from(p).join("Downloads").join("LanShare"))
+        .unwrap_or_else(|_| PathBuf::from(r"C:\Users\高鹏\Downloads\LanShare"))
 }
 
 fn gen_password() -> String {
@@ -249,9 +253,9 @@ fn load_config() -> Config {
             if c.password.is_empty() {
                 c.password = gen_password();
             }
-            // 一次性迁移：早期默认目录为 Downloads\LanShare，现改为 Downloads 根目录
+            // 迁移：早期误设为 Downloads 根目录的配置，改回 Downloads\LanShare
             let s = c.storage_dir.to_string_lossy().to_string();
-            if s.ends_with("Downloads\\LanShare") || s.ends_with("Downloads/LanShare") {
+            if s.ends_with("Downloads") || s.ends_with("Downloads/") || s.ends_with("Downloads\\") {
                 c.storage_dir = default_storage();
                 save_config(&c);
             }
@@ -444,14 +448,25 @@ async fn upload(
             continue;
         }
         let id = uuid::Uuid::new_v4().to_string();
-        let dir = st
-            .inner
-            .cfg
-            .lock()
-            .unwrap()
-            .storage_dir
-            .join(&uploader);
-        let _ = std::fs::create_dir_all(&dir);
+        // 每次上传都确保接收目录存在（不存在则创建）
+        let base = st.inner.cfg.lock().unwrap().storage_dir.clone();
+        if !base.exists() {
+            if let Err(e) = std::fs::create_dir_all(&base) {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("接收目录创建失败: {}", e),
+                )
+                    .into_response();
+            }
+        }
+        let dir = base.join(&uploader);
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("接收目录创建失败: {}", e),
+            )
+                .into_response();
+        }
         let safe = sanitize(&name);
         let path = dir.join(format!("{}__{}", &id[..8], safe));
         if std::fs::write(&path, &data).is_err() {
