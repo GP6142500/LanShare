@@ -631,3 +631,57 @@ hr.sep {
   border-top: 1px solid var(--border);
   margin: 14px 0;
 }
+
+/* ----------------- 设置：自动清理 ----------------- */
+.switch-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  cursor: pointer;
+  font-size: 14px;
+  user-select: none;
+}
+.switch-row input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.cleanup-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-top: 14px;
+}
+.cleanup-grid.disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+@media (max-width: 680px) {
+  .cleanup-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+input[type="number"] {
+  font: inherit;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 8px 11px;
+  width: 100%;
+}
+input[type="number"]:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* 删除按钮：hover 变红，提示破坏性操作 */
+.icon-btn.sm.danger:hover {
+  background: #ef4444;
+  border-color: #ef4444;
+  color: #fff;
+}

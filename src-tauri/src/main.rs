@@ -18,6 +18,15 @@ fn main() {
 
             // 启动时自动开启局域网服务（独立 tokio 任务）
             tauri::async_runtime::spawn(async move {
+                // 自动清理：超容量阈值时删除最旧且超过保留天数的历史文件
+                let (n, freed) = boot.cleanup_on_start();
+                if n > 0 {
+                    eprintln!(
+                        "[lanshare] 自动清理完成：删除 {} 个文件，释放 {} MB",
+                        n,
+                        freed / 1024 / 1024
+                    );
+                }
                 let _ = boot.start().await;
             });
 
@@ -65,7 +74,8 @@ fn main() {
             pick_dir,
             open_dir,
             open_path,
-            reveal_path
+            reveal_path,
+            delete_received_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running LanShare");
@@ -99,8 +109,13 @@ async fn save_settings(
     port: u16,
     password: String,
     storage_dir: String,
+    auto_cleanup: bool,
+    cleanup_max_mb: u64,
+    cleanup_days: u64,
 ) -> Result<(), String> {
-    state.apply_settings(port, password, storage_dir).await
+    state
+        .apply_settings(port, password, storage_dir, auto_cleanup, cleanup_max_mb, cleanup_days)
+        .await
 }
 
 #[tauri::command]
@@ -171,4 +186,10 @@ fn reveal_path(path: String) {
             .unwrap_or(path);
         let _ = std::process::Command::new("xdg-open").arg(parent).spawn();
     }
+}
+
+/// 删除一条已接收的文件（删磁盘 + 内存元数据）。仅主机控制面板使用。
+#[tauri::command]
+fn delete_received_file(state: State<'_, AppState>, id: String) -> bool {
+    state.delete_file(&id)
 }

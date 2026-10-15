@@ -179,6 +179,28 @@
             </div>
           </div>
 
+          <div class="card">
+            <h3>历史文件自动清理</h3>
+            <div class="muted" style="margin-bottom: 10px">
+              接收目录超过容量阈值时，在启动时按最旧优先删除超过保留天数的历史文件；未超过阈值的文件不会删除。
+            </div>
+            <label class="switch-row">
+              <input id="set-cleanup-enabled" type="checkbox" />
+              <span>启用自动清理</span>
+            </label>
+            <div class="cleanup-grid" id="cleanup-fields">
+              <div>
+                <div class="muted" style="margin-bottom: 6px">容量阈值（MB）</div>
+                <input id="set-cleanup-max" type="number" min="1" step="128" />
+              </div>
+              <div>
+                <div class="muted" style="margin-bottom: 6px">保留天数</div>
+                <input id="set-cleanup-days" type="number" min="1" step="1" />
+              </div>
+            </div>
+            <div class="muted" id="cleanup-preview" style="margin-top: 10px"></div>
+          </div>
+
           <div class="row" style="margin-top: 4px">
             <button class="primary" id="settings-save">保存设置</button>
             <span id="settings-msg" class="muted"></span>

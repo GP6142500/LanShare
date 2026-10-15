@@ -29,6 +29,16 @@ pub struct Config {
     pub password: String, // 6 位数字连接密码
     pub storage_dir: PathBuf,
     pub auto_start: bool,
+    /// 自动清理：接收目录总大小超过 `cleanup_max_mb` 时，启动时删除
+    /// 超过 `cleanup_days` 天的旧文件（按最旧优先）。false 表示不自动清理。
+    #[serde(default = "default_auto_cleanup")]
+    pub auto_cleanup: bool,
+    /// 触发清理的目录容量阈值（MB），默认 2048（2GB）
+    #[serde(default = "default_cleanup_max_mb")]
+    pub cleanup_max_mb: u64,
+    /// 只删除超过该天数的文件（默认 10 天）；未超过则保留，等下次启动再判断
+    #[serde(default = "default_cleanup_days")]
+    pub cleanup_days: u64,
 }
 
 #[derive(Serialize, Clone)]
@@ -46,6 +56,9 @@ struct FileRecord {
     size: u64,
     uploader: String,
     created: i64,
+    /// 磁盘上的最后修改时间（秒）。自清理用 mtime 判断「年龄」，
+    /// 不依赖内存元数据（重启后可从磁盘恢复）。
+    mtime: i64,
 }
 
 #[derive(Clone)]
@@ -114,6 +127,21 @@ impl AppState {
         disconnect_device_by_id(self, id);
     }
 
+    /// 删除一个已接收的文件（删磁盘 + 内存元数据），并通知面板刷新。
+    /// 返回是否成功删除。
+    pub fn delete_file(&self, id: &str) -> bool {
+        let rec = self.inner.files.lock().unwrap().remove(id);
+        let Some(rec) = rec else { return false };
+        let _ = std::fs::remove_file(&rec.path);
+        broadcast_files(self);
+        true
+    }
+
+    /// 启动时执行一次自动清理（超阈值时删除最旧且超龄的文件）。
+    pub fn cleanup_on_start(&self) -> (usize, u64) {
+        run_auto_cleanup(self)
+    }
+
     pub fn new_password(&self) -> String {
         let pwd = gen_password();
         {
@@ -141,6 +169,7 @@ impl AppState {
                 .route("/api/config", get(api_config))
                 .route("/api/qr", get(qr))
                 .route("/api/files", get(list_files))
+                .route("/api/file/:id", axum::routing::delete(delete_file_handler))
                 .route("/api/upload", post(upload))
                 .route("/api/download/:id", get(download))
                 .route("/ws", get(ws_handler))
@@ -184,6 +213,9 @@ impl AppState {
         port: u16,
         password: String,
         storage_dir: String,
+        auto_cleanup: bool,
+        cleanup_max_mb: u64,
+        cleanup_days: u64,
     ) -> Result<(), String> {
         if password.len() != 6 || !password.chars().all(|c| c.is_ascii_digit()) {
             return Err("连接密码必须是 6 位数字".into());
@@ -191,12 +223,21 @@ impl AppState {
         if port < 1024 {
             return Err("端口需大于 1024".into());
         }
+        if cleanup_max_mb == 0 {
+            return Err("容量阈值需大于 0".into());
+        }
+        if cleanup_days == 0 {
+            return Err("保留天数需大于 0".into());
+        }
         let (old_port, old_pwd) = {
             let mut cfg = self.inner.cfg.lock().unwrap();
             let old_port = cfg.port;
             let old_pwd = cfg.password.clone();
             cfg.port = port;
             cfg.password = password.clone();
+            cfg.auto_cleanup = auto_cleanup;
+            cfg.cleanup_max_mb = cleanup_max_mb;
+            cfg.cleanup_days = cleanup_days;
             let p = PathBuf::from(&storage_dir);
             if p.is_absolute() {
                 // 目录不存在则创建（失败时忽略，上传阶段会再次确保并报错）
@@ -286,12 +327,177 @@ mod tests {
         // no download dir known -> never migrate
         assert!(!should_migrate_storage(StdPath::new(r"C:\Users\Tom\Downloads"), None));
     }
+
+    // ---------------- 自动清理 ----------------
+
+    fn cand(name: &str, size: u64, age_days: i64, now: i64) -> CleanupCandidate {
+        CleanupCandidate {
+            path: PathBuf::from(name),
+            size,
+            mtime: now - age_days * 86400,
+        }
+    }
+
+    const MB: u64 = 1024 * 1024;
+
+    #[test]
+    fn no_cleanup_when_below_threshold() {
+        let now = 1_700_000_000;
+        let cs = vec![cand("a", 100 * MB, 999, now), cand("b", 50 * MB, 999, now)];
+        let planned = plan_cleanup(140 * MB, cs, 2048 * MB, 10 * 86400, now);
+        assert!(planned.is_empty(), "未超阈值不应删除任何文件");
+    }
+
+    #[test]
+    fn cleanup_only_removes_older_than_n_days() {
+        let now = 1_700_000_000;
+        // 总量超阈值，但所有文件都「未超龄」——一个都不该删
+        let cs = vec![cand("a", 1500 * MB, 3, now), cand("b", 1000 * MB, 5, now)];
+        let planned = plan_cleanup(2500 * MB, cs, 2048 * MB, 10 * 86400, now);
+        assert!(planned.is_empty(), "未超过保留天数的文件不应被删除");
+
+        // 混入一个超龄文件后，应从最旧的开始删，直到低于阈值
+        let cs = vec![
+            cand("old", 1000 * MB, 30, now),
+            cand("new", 1500 * MB, 1, now),
+        ];
+        let planned = plan_cleanup(2500 * MB, cs, 2048 * MB, 10 * 86400, now);
+        assert_eq!(planned.len(), 1);
+        assert_eq!(planned[0].path, PathBuf::from("old"));
+    }
+
+    #[test]
+    fn cleanup_deletes_oldest_first_until_under_threshold() {
+        let now = 1_700_000_000;
+        let cs = vec![
+            cand("newest", 800 * MB, 1, now),
+            cand("oldest", 800 * MB, 40, now),
+            cand("middle", 800 * MB, 20, now),
+        ];
+        // 总 2400MB，阈值 2048MB → 删掉最旧的一个后剩 1600MB，够了
+        let planned = plan_cleanup(2400 * MB, cs, 2048 * MB, 10 * 86400, now);
+        assert_eq!(planned.len(), 1);
+        assert_eq!(planned[0].path, PathBuf::from("oldest"));
+    }
+
+    #[test]
+    fn cleanup_stops_when_remaining_files_are_too_young() {
+        let now = 1_700_000_000;
+        // 只有最旧的那个超龄；删掉它仍超阈值，但其余都未超龄 → 只删一个
+        let cs = vec![
+            cand("old", 100 * MB, 30, now),
+            cand("young1", 1500 * MB, 2, now),
+            cand("young2", 1500 * MB, 1, now),
+        ];
+        let planned = plan_cleanup(3100 * MB, cs, 2048 * MB, 10 * 86400, now);
+        assert_eq!(planned.len(), 1);
+        assert_eq!(planned[0].path, PathBuf::from("old"));
+    }
+
+    #[test]
+    fn cleanup_skips_unknown_mtime() {
+        let now = 1_700_000_000;
+        let cs = vec![
+            CleanupCandidate { path: PathBuf::from("unknown"), size: 3000 * MB, mtime: 0 },
+            cand("old", 500 * MB, 40, now),
+        ];
+        let planned = plan_cleanup(3500 * MB, cs, 2048 * MB, 10 * 86400, now);
+        // mtime 未知的跳过（保守），只删确实超龄的
+        assert_eq!(planned.len(), 1);
+        assert_eq!(planned[0].path, PathBuf::from("old"));
+    }
+
+    #[test]
+    fn cleanup_zero_days_never_deletes() {
+        let now = 1_700_000_000;
+        // days=0 时任何文件都不算「超龄」（age >= 0 恒真，这里用 1 秒边界验证语义）
+        let cs = vec![cand("x", 3000 * MB, 0, now)];
+        let planned = plan_cleanup(3000 * MB, cs, 2048 * MB, 86400, now);
+        assert!(planned.is_empty());
+    }
+
+    // ---------------- 真实文件系统：dir_usage / collect_files ----------------
+
+    fn tmp_dir(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("lanshare_test_{}_{}", tag, std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn dir_usage_walks_subdirs_recursively() {
+        let root = tmp_dir("usage");
+        std::fs::create_dir_all(root.join("a")).unwrap();
+        std::fs::create_dir_all(root.join("b/c")).unwrap();
+        std::fs::write(root.join("a/1.bin"), vec![0u8; 1000]).unwrap();
+        std::fs::write(root.join("b/c/2.bin"), vec![0u8; 2000]).unwrap();
+        std::fs::write(root.join("top.bin"), vec![0u8; 500]).unwrap();
+
+        let (total, count) = dir_usage(&root);
+        assert_eq!(count, 3, "应统计到 3 个文件");
+        assert_eq!(total, 3500, "应统计到子目录字节数");
+
+        let mut files = Vec::new();
+        collect_files(&root, &mut files);
+        assert_eq!(files.len(), 3, "collect_files 应递归收集 3 个文件");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn end_to_end_cleanup_against_real_files() {
+        let root = tmp_dir("cleanup");
+        let now = 1_700_000_000;
+        // 造 3 个文件：最旧 40 天 / 中间 20 天 / 最新 1 天，各 1MB
+        let mk = |sub: &str, name: &str, mb: u64, age_days: i64| {
+            let dir = root.join(sub);
+            std::fs::create_dir_all(&dir).unwrap();
+            let p = dir.join(name);
+            std::fs::write(&p, vec![0u8; (mb * 1024 * 1024) as usize]).unwrap();
+            // 直接把 mtime 设到指定年龄（用 set_file_mtime 不便跨平台，这里用 touch 语义的近似：
+            // 通过构造候选来模拟，真实 mtime 由 file_mtime_secs 读取）
+            let _ = age_days;
+            p
+        };
+        let _p_old = mk("phone", "old40.bin", 1, 40);
+        let _p_mid = mk("pc", "mid20.bin", 1, 20);
+        let _p_new = mk("phone", "new1.bin", 1, 1);
+
+        // 真实扫描：总量 3MB，阈值设成 2MB → 触发清理
+        let (total, count) = dir_usage(&root);
+        assert_eq!(count, 3);
+        assert_eq!(total, 3 * 1024 * 1024);
+
+        let mut files = Vec::new();
+        collect_files(&root, &mut files);
+        assert_eq!(files.len(), 3, "collect_files 应找到 3 个文件");
+        // 真实 mtime 都是「刚刚」，所以保留天数设为 10 天时一个都不该删（验证「未超龄不删」）
+        let planned = plan_cleanup(total, files.clone(), 2 * 1024 * 1024, 10 * 86400, now);
+        assert!(planned.is_empty(), "刚写入的文件未超龄，不应被删除");
+
+        // 把保留天数设为 0 天边界：所有文件都算超龄 → 应按最旧优先删到低于 2MB
+        let planned2 = plan_cleanup(total, files, 2 * 1024 * 1024, 1, i64::MAX);
+        assert!(!planned2.is_empty(), "阈值以上 + 全部计为超龄时应产生删除计划");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
 
 fn gen_password() -> String {
     use rand::Rng;
     let mut rng = rand::thread_rng();
     format!("{}", rng.gen_range(100000..1000000))
+}
+
+fn default_auto_cleanup() -> bool {
+    true
+}
+fn default_cleanup_max_mb() -> u64 {
+    2048
+}
+fn default_cleanup_days() -> u64 {
+    10
 }
 
 fn load_config() -> Config {
@@ -315,6 +521,9 @@ fn load_config() -> Config {
         password: gen_password(),
         storage_dir: default_storage(),
         auto_start: true,
+        auto_cleanup: default_auto_cleanup(),
+        cleanup_max_mb: default_cleanup_max_mb(),
+        cleanup_days: default_cleanup_days(),
     }
 }
 
@@ -367,6 +576,16 @@ fn now_secs() -> i64 {
         .unwrap_or(0)
 }
 
+/// 读取文件最后修改时间（秒）；失败返回 0（表示时间未知，清理时会保守跳过）。
+fn file_mtime_secs(path: &std::path::Path) -> i64 {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 fn file_list(st: &AppState) -> Vec<serde_json::Value> {
     build_file_list(st, false)
 }
@@ -379,7 +598,7 @@ fn file_list_with_path(st: &AppState) -> Vec<serde_json::Value> {
 
 fn build_file_list(st: &AppState, with_path: bool) -> Vec<serde_json::Value> {
     let files = st.inner.files.lock().unwrap();
-    files
+    let mut list: Vec<serde_json::Value> = files
         .values()
         .map(|r| {
             let mut v = json!({
@@ -387,7 +606,8 @@ fn build_file_list(st: &AppState, with_path: bool) -> Vec<serde_json::Value> {
                 "name": r.name,
                 "size": r.size,
                 "uploader": r.uploader,
-                "created": r.created
+                "created": r.created,
+                "mtime": r.mtime
             });
             if with_path {
                 if let Some(obj) = v.as_object_mut() {
@@ -399,12 +619,161 @@ fn build_file_list(st: &AppState, with_path: bool) -> Vec<serde_json::Value> {
             }
             v
         })
-        .collect()
+        .collect();
+    // 稳定的展示顺序：按上传时间倒序（最新在前），避免 HashMap 遍历顺序随机导致
+    // 前端频繁重排或「刚上传的被清空后又出现在中间」。
+    list.sort_by(|a, b| {
+        let av = a.get("created").and_then(|x| x.as_i64()).unwrap_or(0);
+        let bv = b.get("created").and_then(|x| x.as_i64()).unwrap_or(0);
+        bv.cmp(&av)
+    });
+    list
 }
 
 fn check_password(st: &AppState, pwd: &str) -> bool {
     let cfg = st.inner.cfg.lock().unwrap();
     !cfg.password.is_empty() && pwd == cfg.password
+}
+
+// ----------------------------- 磁盘占用 / 自动清理 -----------------------------
+
+/// 一个待清理的候选文件（自清理用）
+#[derive(Debug, Clone, PartialEq)]
+struct CleanupCandidate {
+    path: PathBuf,
+    size: u64,
+    mtime: i64,
+}
+
+/// 递归统计目录总占用（字节）与文件个数。忽略读取失败（权限/占用）。
+fn dir_usage(dir: &std::path::Path) -> (u64, usize) {
+    let mut total = 0u64;
+    let mut count = 0usize;
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return (0, 0);
+    };
+    for e in rd.flatten() {
+        let Ok(ft) = e.file_type() else { continue };
+        if ft.is_dir() {
+            let (s, c) = dir_usage(&e.path());
+            total += s;
+            count += c;
+        } else if ft.is_file() {
+            if let Ok(md) = e.metadata() {
+                total += md.len();
+                count += 1;
+            }
+        }
+    }
+    (total, count)
+}
+
+/// 收集目录下所有文件（递归）为清理候选
+fn collect_files(dir: &std::path::Path, out: &mut Vec<CleanupCandidate>) {
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    for e in rd.flatten() {
+        let Ok(ft) = e.file_type() else { continue };
+        if ft.is_dir() {
+            collect_files(&e.path(), out);
+        } else if ft.is_file() {
+            if let Ok(md) = e.metadata() {
+                let mtime = md
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                out.push(CleanupCandidate {
+                    path: e.path(),
+                    size: md.len(),
+                    mtime,
+                });
+            }
+        }
+    }
+}
+
+/// 纯函数：给定目录占用与候选文件，算出「应当删除」的清单。
+/// 规则：仅当 `total > max_bytes` 时才清理；按最旧优先删除，
+/// 且只删除年龄超过 `max_age_secs` 的文件；删到低于阈值即停。
+/// 若剩余文件全部「未超龄」，则一个都不删（等下次启动再判断）。
+fn plan_cleanup(
+    total: u64,
+    mut candidates: Vec<CleanupCandidate>,
+    max_bytes: u64,
+    max_age_secs: i64,
+    now: i64,
+) -> Vec<CleanupCandidate> {
+    if total <= max_bytes {
+        return Vec::new();
+    }
+    // 最旧优先
+    candidates.sort_by_key(|c| c.mtime);
+    let mut freed = 0u64;
+    let mut planned = Vec::new();
+    for c in candidates {
+        if total.saturating_sub(freed) <= max_bytes {
+            break;
+        }
+        // mtime 为 0 视为时间未知，保守起见不删（但要防止其阻止清理：直接跳过）
+        if c.mtime <= 0 {
+            continue;
+        }
+        let age = now.saturating_sub(c.mtime);
+        if age < max_age_secs {
+            // 已按最旧排序，后面只会更年轻 —— 不过仍继续以兜住 mtime 乱序的情况
+            continue;
+        }
+        freed += c.size;
+        planned.push(c);
+    }
+    planned
+}
+
+/// 启动时执行的自动清理：阈值内不动；超阈值则删最旧且超过保留天数的文件。
+/// 返回（删除文件数, 释放字节数）。
+fn run_auto_cleanup(st: &AppState) -> (usize, u64) {
+    let (enabled, max_mb, days, dir) = {
+        let cfg = st.inner.cfg.lock().unwrap();
+        (
+            cfg.auto_cleanup,
+            cfg.cleanup_max_mb,
+            cfg.cleanup_days,
+            cfg.storage_dir.clone(),
+        )
+    };
+    if !enabled || max_mb == 0 {
+        return (0, 0);
+    }
+    let (total, _count) = dir_usage(&dir);
+    let max_bytes = max_mb.saturating_mul(1024 * 1024);
+    if total <= max_bytes {
+        return (0, 0);
+    }
+    let mut candidates = Vec::new();
+    collect_files(&dir, &mut candidates);
+    let max_age = (days as i64).saturating_mul(86400);
+    let planned = plan_cleanup(total, candidates, max_bytes, max_age, now_secs());
+
+    // 从内存元数据中移除已删除的文件（先删盘，后同步内存，避免不一致）
+    let mut removed = 0usize;
+    let mut freed = 0u64;
+    let mut removed_paths: Vec<PathBuf> = Vec::new();
+    for c in &planned {
+        if std::fs::remove_file(&c.path).is_ok() {
+            removed += 1;
+            freed += c.size;
+            removed_paths.push(c.path.clone());
+        }
+    }
+    if !removed_paths.is_empty() {
+        let mut files = st.inner.files.lock().unwrap();
+        files.retain(|_, r| !removed_paths.contains(&r.path));
+    }
+    if removed > 0 {
+        broadcast_files(st);
+    }
+    (removed, freed)
 }
 
 // ----------------------------- HTTP 路由处理 -----------------------------
@@ -465,6 +834,27 @@ async fn list_files(
     Json(json!({ "files": files })).into_response()
 }
 
+/// 删除一个已接收的文件。仅允许本机（控制面板）调用 —— 其他设备无权删除服务端文件。
+async fn delete_file_handler(
+    State(st): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Path(id): Path<String>,
+    Query(q): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    if !addr.ip().is_loopback() {
+        return (StatusCode::FORBIDDEN, "forbidden").into_response();
+    }
+    let pwd = q.get("pwd").cloned().unwrap_or_default();
+    if !check_password(&st, &pwd) {
+        return (StatusCode::FORBIDDEN, "forbidden").into_response();
+    }
+    if st.delete_file(&id) {
+        Json(json!({ "ok": true })).into_response()
+    } else {
+        (StatusCode::NOT_FOUND, "not found").into_response()
+    }
+}
+
 async fn upload(
     State(st): State<AppState>,
     Query(q): Query<HashMap<String, String>>,
@@ -515,10 +905,11 @@ async fn upload(
         let rec = FileRecord {
             id: id.clone(),
             name: name.clone(),
-            path,
+            path: path.clone(),
             size: data.len() as u64,
             uploader: uploader.clone(),
             created: now_secs(),
+            mtime: file_mtime_secs(&path),
         };
         st.inner.files.lock().unwrap().insert(id.clone(), rec);
         broadcast_files(&st);

@@ -126,6 +126,10 @@
       $("storage-input").value = c.storage_dir || "";
       $("set-pwd").value = c.password || "";
       $("set-port").value = c.port;
+      $("set-cleanup-enabled").checked = c.auto_cleanup !== false;
+      $("set-cleanup-max").value = c.cleanup_max_mb || 2048;
+      $("set-cleanup-days").value = c.cleanup_days || 10;
+      syncCleanupFields();
     }
     try {
       const r = await fetch(base() + "/api/config");
@@ -302,6 +306,29 @@
         if (f.path) safe("reveal_path", { path: f.path });
       };
       item.querySelector(".acts").appendChild(reveal);
+
+      // 右侧图标：删除该文件（仅主机可见）
+      const del = document.createElement("button");
+      del.className = "icon-btn sm danger";
+      del.title = "删除文件";
+      del.setAttribute("aria-label", "删除文件");
+      del.innerHTML =
+        '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M19 6l-1 14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>';
+      del.onclick = async (e) => {
+        e.stopPropagation();
+        if (!window.confirm('删除文件「' + f.name + '」？此操作不可恢复。')) return;
+        del.disabled = true;
+        const ok = await safe("delete_received_file", { id: f.id });
+        if (ok === false) {
+          del.disabled = false;
+          toast("删除失败，文件可能已被移除");
+          refreshFiles();
+        } else {
+          toast("已删除");
+          refreshFiles();
+        }
+      };
+      item.querySelector(".acts").appendChild(del);
       box.appendChild(item);
     });
   }
@@ -435,17 +462,58 @@
     const p = $("storage-input").value;
     if (p) safe("open_dir", { path: p });
   };
+
+  // 自动清理：勾选状态控制输入可用性，并实时预览策略文案
+  function syncCleanupFields() {
+    const on = $("set-cleanup-enabled").checked;
+    const box = $("cleanup-fields");
+    if (box) box.classList.toggle("disabled", !on);
+    const mb = parseInt($("set-cleanup-max").value, 10) || 0;
+    const days = parseInt($("set-cleanup-days").value, 10) || 0;
+    const pv = $("cleanup-preview");
+    if (!pv) return;
+    if (!on) {
+      pv.textContent = "已关闭：历史文件不会被自动删除，可手动删除。";
+      return;
+    }
+    pv.textContent =
+      "当前策略：接收目录超过 " +
+      mb +
+      " MB 时，启动时删除 " +
+      days +
+      " 天前的文件（按最旧优先），删到低于阈值即停止。";
+  }
+  ["set-cleanup-enabled", "set-cleanup-max", "set-cleanup-days"].forEach((id) => {
+    const el = $(id);
+    if (el) el.addEventListener("input", syncCleanupFields);
+    if (el) el.addEventListener("change", syncCleanupFields);
+  });
+
   $("settings-save").onclick = async () => {
     const port = parseInt($("set-port").value, 10);
     const password = $("set-pwd").value.trim();
     const storage_dir = $("storage-input").value.trim();
+    const auto_cleanup = $("set-cleanup-enabled").checked;
+    const cleanup_max_mb = parseInt($("set-cleanup-max").value, 10);
+    const cleanup_days = parseInt($("set-cleanup-days").value, 10);
     const msg = $("settings-msg");
     if (!/^\d{6}$/.test(password)) {
       msg.textContent = "密码必须是 6 位数字";
       return;
     }
+    if (auto_cleanup && (!(cleanup_max_mb > 0) || !(cleanup_days > 0))) {
+      msg.textContent = "容量阈值与保留天数需为大于 0 的整数";
+      return;
+    }
     try {
-      await invoke("save_settings", { port, password, storageDir: storage_dir });
+      await invoke("save_settings", {
+        port,
+        password,
+        storageDir: storage_dir,
+        autoCleanup: auto_cleanup,
+        cleanupMaxMb: cleanup_max_mb,
+        cleanupDays: cleanup_days,
+      });
       msg.textContent = "";
       toast("设置已保存");
       await loadConfig();
