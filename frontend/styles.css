@@ -360,9 +360,24 @@ button.ghost {
 
 .pwd-strong {
   font-weight: 700;
-  font-size: 20px;
+  font-size: 32px;
   letter-spacing: 3px;
-  max-width: 200px;
+  max-width: 240px;
+}
+
+/* 首页整体放大字号（仅作用于首页，不影响侧边栏与其他页） */
+#view-home {
+  font-size: 20px;
+  line-height: 1.7;
+}
+#view-home .view-head h2 {
+  font-size: 28px;
+}
+#view-home .view-head p {
+  font-size: 20px;
+}
+#view-home .card h3 {
+  font-size: 22px;
 }
 
 input[type="text"],
