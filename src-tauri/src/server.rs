@@ -224,9 +224,66 @@ fn config_dir() -> PathBuf {
 }
 
 fn default_storage() -> PathBuf {
-    std::env::var("USERPROFILE")
-        .map(|p| PathBuf::from(p).join("Downloads").join("LanShare"))
-        .unwrap_or_else(|_| PathBuf::from(r"C:\Users\高鹏\Downloads\LanShare"))
+    resolve_default_storage(dirs::download_dir(), std::env::var("USERPROFILE").ok())
+}
+
+/// Pure resolver (no env access) so it can be unit tested.
+/// Priority: OS-reported Downloads > %USERPROFILE%\Downloads > system temp dir.
+/// The chosen base always gets a `LanShare` subfolder appended.
+fn resolve_default_storage(download: Option<PathBuf>, userprofile: Option<String>) -> PathBuf {
+    download
+        .or_else(|| userprofile.map(|p| PathBuf::from(p).join("Downloads")))
+        .unwrap_or_else(std::env::temp_dir)
+        .join("LanShare")
+}
+
+/// True only when the stored dir is exactly the machine's Downloads root
+/// (old buggy default). Custom dirs such as `D:\Downloads` are preserved
+/// because they never equal *this* machine's `download_dir()`.
+fn should_migrate_storage(stored: &std::path::Path, download: Option<&std::path::Path>) -> bool {
+    let Some(dl) = download else { return false };
+    let cur = stored.to_string_lossy();
+    let dl = dl.to_string_lossy();
+    let dl = dl.trim_end_matches(['/', '\\']);
+    cur.trim_end_matches(['/', '\\']) == dl
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn storage_prefers_os_downloads_dir() {
+        let got = resolve_default_storage(Some(PathBuf::from(r"D:\MyDownloads")), None);
+        assert_eq!(got, PathBuf::from(r"D:\MyDownloads\LanShare"));
+    }
+
+    #[test]
+    fn storage_falls_back_to_userprofile() {
+        let got = resolve_default_storage(None, Some(r"C:\Users\Tom".to_string()));
+        assert_eq!(got, PathBuf::from(r"C:\Users\Tom\Downloads\LanShare"));
+    }
+
+    #[test]
+    fn storage_falls_back_to_temp_when_nothing_available() {
+        let got = resolve_default_storage(None, None);
+        assert!(got.ends_with("LanShare"));
+    }
+
+    #[test]
+    fn migrate_only_when_equal_to_local_downloads_root() {
+        use std::path::Path as StdPath;
+        let dl = StdPath::new(r"C:\Users\Tom\Downloads");
+        // old buggy value -> migrate
+        assert!(should_migrate_storage(StdPath::new(r"C:\Users\Tom\Downloads"), Some(dl)));
+        assert!(should_migrate_storage(StdPath::new(r"C:\Users\Tom\Downloads\"), Some(dl)));
+        // already correct -> keep
+        assert!(!should_migrate_storage(StdPath::new(r"C:\Users\Tom\Downloads\LanShare"), Some(dl)));
+        // custom path on another drive -> keep (must NOT be migrated)
+        assert!(!should_migrate_storage(StdPath::new(r"D:\Downloads"), Some(dl)));
+        // no download dir known -> never migrate
+        assert!(!should_migrate_storage(StdPath::new(r"C:\Users\Tom\Downloads"), None));
+    }
 }
 
 fn gen_password() -> String {
@@ -242,9 +299,9 @@ fn load_config() -> Config {
             if c.password.is_empty() {
                 c.password = gen_password();
             }
-            // 迁移：早期误设为 Downloads 根目录的配置，改回 Downloads\LanShare
-            let s = c.storage_dir.to_string_lossy().to_string();
-            if s.ends_with("Downloads") || s.ends_with("Downloads/") || s.ends_with("Downloads\\") {
+            // 迁移：早期版本把接收目录存成 <Downloads> 根目录（而非 <Downloads>\LanShare）。
+            // 仅当该目录正是「本机默认下载目录本身」时才迁移，避免误伤用户自定义路径。
+            if should_migrate_storage(&c.storage_dir, dirs::download_dir().as_deref()) {
                 c.storage_dir = default_storage();
                 save_config(&c);
             }
