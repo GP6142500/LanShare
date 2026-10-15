@@ -358,6 +358,13 @@ button.ghost {
   color: var(--accent);
 }
 
+.pwd-strong {
+  font-weight: 700;
+  font-size: 20px;
+  letter-spacing: 3px;
+  max-width: 200px;
+}
+
 input[type="text"],
 input[type="file"] {
   font: inherit;

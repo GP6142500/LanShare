@@ -68,18 +68,19 @@
             </div>
           </div>
 
-          <div class="card">
-            <div class="row between top">
-              <div style="min-width: 220px">
-                <div class="muted" style="margin-bottom: 6px">连接密码</div>
-                <div class="row">
-                  <input id="pwd-display" type="text" readonly value="······" style="max-width: 168px" />
-                  <button class="icon-btn" id="pwd-toggle" title="显示密码" aria-label="显示密码">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
-                  </button>
-                </div>
+          <div class="section-split">
+            <div class="card">
+              <h3>连接密码</h3>
+              <div class="row">
+                <input id="pwd-display" type="text" readonly value="······" class="pwd-strong" />
+                <button class="icon-btn" id="pwd-toggle" title="显示密码" aria-label="显示密码">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+                </button>
               </div>
-              <div class="row" style="gap: 14px">
+            </div>
+            <div class="card">
+              <h3>服务开关</h3>
+              <div class="row between">
                 <div class="row">
                   <span id="svc-dot" class="dot"></span>
                   <span id="svc-text" class="muted">检测中…</span>
