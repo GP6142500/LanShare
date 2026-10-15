@@ -572,17 +572,20 @@ textarea:focus {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 16px;
-  align-items: stretch;
+  /* 两栏各自独立高度：右侧文件变多向下扩展时，左侧文本卡片不被拉高 */
+  align-items: start;
 }
 
 .tx-split .card {
   margin-bottom: 0;
 }
 
-/* 右侧文件共享卡片：初始与左栏等高（作为最低高度），文件多时向下自然扩展 */
+/* 右侧文件共享卡片：纵向 flex，文件列表填充剩余空间 */
 .tx-split .file-card {
   display: flex;
   flex-direction: column;
+  /* 与左侧文本卡片起始等高；文件多时可继续向下扩展 */
+  min-height: var(--tx-min-h, 0);
 }
 
 .tx-split #text-shared {

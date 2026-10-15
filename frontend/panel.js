@@ -36,11 +36,33 @@
     document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
     const target = $("view-" + name);
     if (target) target.classList.add("active");
+    // 传输页可见后才能测量左卡高度（隐藏时 offsetHeight 为 0）
+    if (name === "devices") requestAnimationFrame(syncTxMinHeight);
   }
   function initNav() {
     document.querySelectorAll(".nav-item").forEach((btn) => {
       btn.onclick = () => switchView(btn.dataset.view);
     });
+  }
+
+  // ----------------- 传输页等高（右卡以左卡高度为最小高度，右侧扩展不拉动左侧） -----------------
+  function syncTxMinHeight() {
+    const split = $("tx-split");
+    const left = $("text-card");
+    if (!split || !left) return;
+    // 左侧需可见时才有有效高度
+    if (!left.offsetHeight) return;
+    split.style.setProperty("--tx-min-h", left.offsetHeight + "px");
+  }
+  function watchTxMinHeight() {
+    syncTxMinHeight();
+    window.addEventListener("resize", syncTxMinHeight);
+    // 文本卡片内容/字号变化时重新测量
+    if (window.ResizeObserver) {
+      const ro = new ResizeObserver(() => syncTxMinHeight());
+      const left = $("text-card");
+      if (left) ro.observe(left);
+    }
   }
 
   // ----------------- Toast -----------------
@@ -497,6 +519,7 @@
     refreshStatus();
     connect();
     refreshDevices();
+    watchTxMinHeight();
     setTimeout(refreshFiles, 800);
     setInterval(refreshStatus, 3000);
     setInterval(refreshDevices, 3000);
