@@ -1,5 +1,8 @@
-# Rust
-/target
+# Rust 编译产物（任意位置的 target）
+**/target
+
+# Tauri 生成文件
+**/gen
 
 # Node
 node_modules
