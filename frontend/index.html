@@ -105,36 +105,44 @@
 
           <div class="card">
             <h3>已连接设备</h3>
-            <div id="device-list" class="list"></div>
+            <div id="device-list" class="dev-chips"></div>
           </div>
 
-          <div class="card">
-            <h3>文本同步</h3>
-            <div class="muted" style="margin-bottom: 8px">输入并发送后，所有已连接设备实时收到；也可复制他人发来的文本</div>
-            <textarea id="text-out" placeholder="在此输入要同步的文本，点发送…"></textarea>
-            <div class="row" style="margin-top: 10px; justify-content: space-between">
-              <button class="primary" id="text-send">发送</button>
-              <span class="muted" id="text-hint"></span>
+          <div class="tx-split">
+            <!-- 左：发送 -->
+            <div class="card">
+              <h3>发送</h3>
+
+              <div class="muted tx-label">文本</div>
+              <textarea id="text-out" placeholder="在此输入要同步的文本，点发送…"></textarea>
+              <div class="row" style="margin-top: 10px; justify-content: space-between">
+                <button class="primary" id="text-send">发送</button>
+                <span class="muted" id="text-hint"></span>
+              </div>
+
+              <hr class="sep" />
+
+              <div class="muted tx-label">文件（分享给设备下载）</div>
+              <div class="row">
+                <input id="share-file" type="file" multiple />
+                <button class="primary" id="share-btn">上传分享</button>
+              </div>
             </div>
-            <hr class="sep" />
-            <div class="muted" style="margin-bottom: 6px">收到的文本</div>
-            <textarea id="text-in" readonly placeholder="等待接收…"></textarea>
-            <div class="row" style="margin-top: 8px; justify-content: flex-end">
-              <button class="ghost" id="text-copy">复制</button>
-            </div>
-          </div>
 
-          <div class="card">
-            <h3>接收的文件</h3>
-            <div class="muted" style="margin-bottom: 8px">设备上传到本机的文件，可点击下载</div>
-            <div id="file-list" class="list"></div>
-          </div>
+            <!-- 右：接收 -->
+            <div class="card">
+              <h3>接收</h3>
 
-          <div class="card">
-            <h3>传送文件（分享给设备下载）</h3>
-            <div class="row">
-              <input id="share-file" type="file" multiple />
-              <button class="primary" id="share-btn">上传分享</button>
+              <div class="muted tx-label">收到的文本</div>
+              <textarea id="text-in" readonly placeholder="等待接收…"></textarea>
+              <div class="row" style="margin-top: 8px; justify-content: flex-end">
+                <button class="ghost" id="text-copy">复制</button>
+              </div>
+
+              <hr class="sep" />
+
+              <div class="muted tx-label">收到的文件</div>
+              <div id="file-list" class="list"></div>
             </div>
           </div>
         </section>

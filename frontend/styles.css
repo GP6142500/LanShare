@@ -496,6 +496,70 @@ textarea:focus {
   transform: translateY(0);
 }
 
+/* 传输页：可断开的小卡片（含右上角红叉） */
+.dev-chip.closable {
+  position: relative;
+  padding-right: 26px;
+}
+
+.dev-chip.closable:hover {
+  transform: none;
+  border-color: var(--border);
+}
+
+.dev-chip .chip-close {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.dev-chip .chip-close:hover {
+  background: #ef4444;
+  border-color: #ef4444;
+  color: #fff;
+}
+
+.tx-label {
+  margin: 0 0 6px;
+}
+
+/* 传输页左右布局：左发送 / 右接收 */
+.tx-split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+.tx-split .card {
+  margin-bottom: 0;
+}
+
+.tx-split #text-out,
+.tx-split #text-in {
+  min-height: 88px;
+}
+
+@media (max-width: 680px) {
+  .tx-split {
+    grid-template-columns: 1fr;
+  }
+}
+
 .dev-chip .dev-chip-dot {
   flex: 0 0 auto;
   width: 7px;

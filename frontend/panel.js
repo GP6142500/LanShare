@@ -170,22 +170,9 @@
       return;
     }
     list.forEach((d) => {
-      const item = document.createElement("div");
-      item.className = "item";
-      item.innerHTML =
-        '<div class="meta"><div class="name"></div><div class="sub"></div></div>' +
-        '<div class="acts"></div>';
-      item.querySelector(".name").textContent = d.name;
-      item.querySelector(".sub").textContent = "连接于 " + fmtTime(d.connected_at);
-      const btn = document.createElement("button");
-      btn.className = "danger";
-      btn.textContent = "断开";
-      btn.onclick = async () => {
-        await safe("disconnect_device", { id: d.id });
-        toast("已断开 " + d.name);
-      };
-      item.querySelector(".acts").appendChild(btn);
-      box.appendChild(item);
+      const chip = makeChip(d, { closable: true });
+      chip.title = d.name + "\n连接于 " + fmtTime(d.connected_at);
+      box.appendChild(chip);
     });
     renderHomeDevices(list);
   }
@@ -200,19 +187,43 @@
       return;
     }
     list.forEach((d) => {
-      const chip = document.createElement("div");
-      chip.className = "dev-chip";
+      const chip = makeChip(d);
       chip.title = d.name + "（连接于 " + fmtTime(d.connected_at) + "）点击前往传输页";
       chip.onclick = () => switchView("devices");
-      const dot = document.createElement("span");
-      dot.className = "dev-chip-dot";
-      const name = document.createElement("span");
-      name.className = "dev-chip-name";
-      name.textContent = d.name;
-      chip.appendChild(dot);
-      chip.appendChild(name);
       box.appendChild(chip);
     });
+  }
+
+  // 生成一枚设备小卡片：dot + 名称，可选右上角红叉（断开）
+  function makeChip(d, opts) {
+    const closable = !!(opts && opts.closable);
+    const chip = document.createElement("div");
+    chip.className = "dev-chip" + (closable ? " closable" : "");
+
+    const dot = document.createElement("span");
+    dot.className = "dev-chip-dot";
+    const name = document.createElement("span");
+    name.className = "dev-chip-name";
+    name.textContent = d.name;
+    chip.appendChild(dot);
+    chip.appendChild(name);
+
+    if (closable) {
+      const close = document.createElement("button");
+      close.className = "chip-close";
+      close.type = "button";
+      close.title = "断开 " + d.name;
+      close.setAttribute("aria-label", "断开 " + d.name);
+      close.textContent = "×";
+      close.onclick = async (e) => {
+        e.stopPropagation();
+        close.disabled = true;
+        await safe("disconnect_device", { id: d.id });
+        toast("已断开 " + d.name);
+      };
+      chip.appendChild(close);
+    }
+    return chip;
   }
   function fmtTime(secs) {
     if (!secs) return "";
