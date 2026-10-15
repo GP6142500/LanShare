@@ -284,19 +284,43 @@
   $("share-btn").onclick = async () => {
     const input = $("share-file");
     const files = input.files;
-    if (!files.length) return;
+    if (!files.length) {
+      toast("请先选择文件");
+      return;
+    }
+    // 确保密码已就绪（服务刚启动时 welcome 可能未到）
+    if (!hostPassword) {
+      const c = await safe("get_config");
+      if (c) hostPassword = c.password || "";
+    }
+    if (!hostPassword) {
+      toast("连接密码未就绪，请稍后重试");
+      return;
+    }
+    let ok = 0,
+      fail = 0;
     for (const f of files) {
       const fd = new FormData();
       fd.append("file", f);
       try {
-        await fetch(
-          base() + "/api/upload?pwd=" + encodeURIComponent(hostPassword) + "&name=" + encodeURIComponent("本机"),
+        const r = await fetch(
+          base() +
+            "/api/upload?pwd=" +
+            encodeURIComponent(hostPassword) +
+            "&name=" +
+            encodeURIComponent("本机"),
           { method: "POST", body: fd }
         );
-      } catch (e) {}
+        if (r.ok) ok++;
+        else fail++;
+      } catch (e) {
+        fail++;
+      }
     }
     input.value = "";
-    toast("已加入分享列表");
+    if (ok && !fail) toast("已上传 " + ok + " 个文件");
+    else if (ok && fail) toast("已上传 " + ok + " 个，失败 " + fail + " 个");
+    else toast("上传失败，请确认服务已启动");
   };
 
   // ----------------- 设置 -----------------

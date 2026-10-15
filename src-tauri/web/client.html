@@ -285,14 +285,26 @@
         };
         $("upload").onclick = function () {
           var input = $("file");
+          if (!input.files.length) { showMsg("请先选择要上传的文件"); return; }
+          var total = input.files.length, done = 0, fail = 0;
           for (var i = 0; i < input.files.length; i++) {
             var fd = new FormData();
             fd.append("file", input.files[i]);
             fetch(base + "/api/upload?pwd=" + encodeURIComponent(pwd) + "&name=" + encodeURIComponent(name), { method: "POST", body: fd })
-              .catch(function () {});
+              .then(function (r) {
+                if (r.ok) done++; else fail++;
+              })
+              .catch(function () { fail++; })
+              .then(function () {
+                if (done + fail === total) {
+                  input.value = "";
+                  if (done && !fail) setStatus(true, "已上传 " + done + " 个文件");
+                  else if (done && fail) setStatus(true, "上传 " + done + " 个，失败 " + fail + " 个");
+                  else { showMsg("上传失败，请检查连接"); setStatus(true, "已连接"); }
+                  refreshFiles();
+                }
+              });
           }
-          input.value = "";
-          setTimeout(refreshFiles, 600);
         };
         $("send").onclick = function () {
           var v = $("out").value;

@@ -249,6 +249,12 @@ fn load_config() -> Config {
             if c.password.is_empty() {
                 c.password = gen_password();
             }
+            // 一次性迁移：早期默认目录为 Downloads\LanShare，现改为 Downloads 根目录
+            let s = c.storage_dir.to_string_lossy().to_string();
+            if s.ends_with("Downloads\\LanShare") || s.ends_with("Downloads/LanShare") {
+                c.storage_dir = default_storage();
+                save_config(&c);
+            }
             return c;
         }
     }
@@ -592,7 +598,9 @@ async fn handle_socket(
     if role == "host" {
         *st.inner.host.lock().unwrap() = None;
     } else if let Some(id) = device_id.take() {
-        if let Some(d) = st.inner.devices.lock().unwrap().remove(&id) {
+        // 先释放 devices 锁再广播，避免死锁
+        let removed = st.inner.devices.lock().unwrap().remove(&id);
+        if let Some(d) = removed {
             broadcast_devices(&st);
             notify_host(&st, &json!({ "type": "toast", "text": format!("{} 已断开", d.name) }));
         }
@@ -722,7 +730,9 @@ fn notify_host(st: &AppState, msg: &serde_json::Value) {
 }
 
 fn disconnect_device_by_id(st: &AppState, id: &str) {
-    if let Some(d) = st.inner.devices.lock().unwrap().remove(id) {
+    // 先取出设备并释放 devices 锁，再广播，避免重复锁同一 Mutex 造成死锁
+    let removed = st.inner.devices.lock().unwrap().remove(id);
+    if let Some(d) = removed {
         let _ = d
             .sender
             .send(json!({ "type": "disconnected", "reason": "已被主机断开" }).to_string());
