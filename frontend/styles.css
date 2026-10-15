@@ -436,6 +436,11 @@ input:focus {
   border-color: var(--accent);
   background: var(--accent-soft);
 }
+/* 鼠标落在行内图标按钮上时，取消整行高亮，避免两种悬停效果叠加 */
+.item.clickable:has(.icon-btn:hover) {
+  border-color: var(--border);
+  background: transparent;
+}
 .item .meta {
   min-width: 0;
 }
@@ -567,11 +572,17 @@ textarea:focus {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 16px;
-  align-items: start;
+  align-items: stretch;
 }
 
 .tx-split .card {
   margin-bottom: 0;
+}
+
+/* 右侧文件共享卡片：初始与左栏等高（作为最低高度），文件多时向下自然扩展 */
+.tx-split .file-card {
+  display: flex;
+  flex-direction: column;
 }
 
 .tx-split #text-shared {
