@@ -342,6 +342,22 @@ button.ghost {
   padding: 4px 8px;
 }
 
+.icon-btn {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--muted);
+}
+.icon-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 input[type="text"],
 input[type="file"] {
   font: inherit;

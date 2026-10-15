@@ -124,22 +124,32 @@
   }
 
   // ----------------- 密码展示 -----------------
+  const EYE =
+    '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>';
+  const EYE_OFF =
+    '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.88 9.88a3 3 0 0 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c6.5 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3.5 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" y1="2" x2="22" y2="22"/></svg>';
   let pwdShown = false;
   function renderPwd() {
     $("pwd-display").value = pwdShown ? hostPassword : "······";
+    const btn = $("pwd-toggle");
+    if (btn) {
+      btn.innerHTML = pwdShown ? EYE_OFF : EYE;
+      btn.title = pwdShown ? "隐藏密码" : "显示密码";
+      btn.setAttribute("aria-label", btn.title);
+    }
   }
   $("pwd-toggle").onclick = () => {
     pwdShown = !pwdShown;
-    $("pwd-toggle").textContent = pwdShown ? "隐藏" : "显示";
     renderPwd();
   };
-  $("pwd-reset").onclick = async () => {
+  $("set-pwd-reset").onclick = async () => {
     const p = await safe("regenerate_password");
     if (p) {
       hostPassword = p;
-      renderPwd();
       $("set-pwd").value = p;
+      renderPwd();
       toast("连接密码已重置");
+      await loadConfig();
     }
   };
 

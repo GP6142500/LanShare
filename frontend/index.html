@@ -47,18 +47,7 @@
         <section class="view active" id="view-home">
           <div class="view-head">
             <h2>首页</h2>
-            <p>连接信息、服务控制与连接密码</p>
-          </div>
-
-          <div class="card">
-            <h3>局域网服务</h3>
-            <div class="row between">
-              <div class="row">
-                <span id="svc-dot" class="dot"></span>
-                <span id="svc-text" class="muted">检测中…</span>
-              </div>
-              <button id="svc-toggle" class="primary">停止服务</button>
-            </div>
+            <p>连接信息与快速控制</p>
           </div>
 
           <div class="card">
@@ -80,12 +69,23 @@
           </div>
 
           <div class="card">
-            <h3>连接密码</h3>
-            <div class="muted" style="margin-bottom: 8px">其他设备打开网址后，输入此密码即可自动连接。在「设置」中可修改。</div>
-            <div class="row">
-              <input id="pwd-display" type="text" readonly value="······" />
-              <button class="ghost" id="pwd-toggle">显示</button>
-              <button id="pwd-reset" class="ghost">重置密码</button>
+            <div class="row between top">
+              <div style="min-width: 220px">
+                <div class="muted" style="margin-bottom: 6px">连接密码</div>
+                <div class="row">
+                  <input id="pwd-display" type="text" readonly value="······" style="max-width: 168px" />
+                  <button class="icon-btn" id="pwd-toggle" title="显示密码" aria-label="显示密码">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+                  </button>
+                </div>
+              </div>
+              <div class="row" style="gap: 14px">
+                <div class="row">
+                  <span id="svc-dot" class="dot"></span>
+                  <span id="svc-text" class="muted">检测中…</span>
+                </div>
+                <button id="svc-toggle" class="primary">停止服务</button>
+              </div>
             </div>
           </div>
         </section>
@@ -143,6 +143,9 @@
             <h3>连接密码</h3>
             <div class="muted" style="margin-bottom: 8px">6 位数字，修改后已连接设备需重新输入。</div>
             <input id="set-pwd" type="text" maxlength="6" inputmode="numeric" placeholder="6 位数字" />
+            <div class="row" style="margin-top: 10px">
+              <button id="set-pwd-reset" class="ghost">重置密码</button>
+            </div>
           </div>
 
           <div class="card">
