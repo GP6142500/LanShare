@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::body::Body;
 use axum::extract::connect_info::ConnectInfo;
-use axum::extract::{Multipart, Path, Query, State, WebSocketUpgrade};
+use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State, WebSocketUpgrade};
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
@@ -48,17 +48,6 @@ struct FileRecord {
     created: i64,
 }
 
-#[derive(Clone, Serialize)]
-struct HistoryRecord {
-    id: String,
-    kind: String, // "file" | "text"
-    name: String, // 文件名 / 文本截断预览
-    value: String, // 文件为磁盘路径；文本为完整内容
-    size: u64,
-    source: String, // 来源设备名 / 本机
-    created: i64,
-}
-
 #[derive(Clone)]
 struct DeviceConn {
     name: String,
@@ -80,8 +69,7 @@ pub struct AppState {
 struct Inner {
     cfg: Mutex<Config>,
     files: Mutex<HashMap<String, FileRecord>>,
-    history: Mutex<Vec<HistoryRecord>>, // 接收历史（文件 + 文本，含来源）
-    host: Mutex<Option<ClientSink>>,    // 控制面板（主机）WebSocket
+    host: Mutex<Option<ClientSink>>, // 控制面板（主机）WebSocket
     devices: Mutex<HashMap<String, DeviceConn>>, // 已连接（已配对）设备
     runtime: Mutex<Option<ServerRuntime>>,
 }
@@ -94,7 +82,6 @@ impl AppState {
             inner: Arc::new(Inner {
                 cfg: Mutex::new(load_config()),
                 files: Mutex::new(HashMap::new()),
-                history: Mutex::new(Vec::new()),
                 host: Mutex::new(None),
                 devices: Mutex::new(HashMap::new()),
                 runtime: Mutex::new(None),
@@ -155,6 +142,8 @@ impl AppState {
                 .route("/api/upload", post(upload))
                 .route("/api/download/:id", get(download))
                 .route("/ws", get(ws_handler))
+                // 放宽请求体上限（默认仅 2MB，手机照片/大文件会 400）；此处允许 2GB
+                .layer(DefaultBodyLimit::max(2 * 1024 * 1024 * 1024))
                 .layer(CorsLayer::permissive())
                 .with_state(st.clone());
             let addr = SocketAddr::from(([0, 0, 0, 0], port));
@@ -340,41 +329,6 @@ fn check_password(st: &AppState, pwd: &str) -> bool {
     !cfg.password.is_empty() && pwd == cfg.password
 }
 
-fn push_history(st: &AppState, rec: HistoryRecord) {
-    {
-        let mut h = st.inner.history.lock().unwrap();
-        h.push(rec);
-        if h.len() > 200 {
-            let excess = h.len() - 200;
-            h.drain(0..excess);
-        }
-    }
-    broadcast_history(st);
-}
-
-fn history_list(st: &AppState) -> Vec<serde_json::Value> {
-    let hist = st.inner.history.lock().unwrap();
-    hist.iter()
-        .rev()
-        .map(|h| {
-            json!({
-                "id": h.id,
-                "kind": h.kind,
-                "name": h.name,
-                "value": h.value,
-                "size": h.size,
-                "source": h.source,
-                "created": h.created
-            })
-        })
-        .collect()
-}
-
-fn broadcast_history(st: &AppState) {
-    let items = history_list(st);
-    notify_host(st, &json!({ "type": "history", "items": items }));
-}
-
 // ----------------------------- HTTP 路由处理 -----------------------------
 
 async fn serve_client() -> Html<&'static str> {
@@ -472,7 +426,6 @@ async fn upload(
         if std::fs::write(&path, &data).is_err() {
             return (StatusCode::INTERNAL_SERVER_ERROR, "write error").into_response();
         }
-        let path_str = path.to_string_lossy().to_string();
         let rec = FileRecord {
             id: id.clone(),
             name: name.clone(),
@@ -483,21 +436,6 @@ async fn upload(
         };
         st.inner.files.lock().unwrap().insert(id.clone(), rec);
         broadcast_files(&st);
-        // 记录接收历史（仅来自设备，主机分享不计入）
-        if uploader != "本机" {
-            push_history(
-                &st,
-                HistoryRecord {
-                    id: id.clone(),
-                    kind: "file".into(),
-                    name: name.clone(),
-                    value: path_str,
-                    size: data.len() as u64,
-                    source: uploader.clone(),
-                    created: now_secs(),
-                },
-            );
-        }
         return Json(json!({ "id": id, "name": name, "size": data.len() })).into_response();
     }
     (StatusCode::BAD_REQUEST, "no file").into_response()
@@ -578,8 +516,7 @@ async fn handle_socket(
                     "password": password,
                     "port": port,
                     "files": files,
-                    "devices": devices,
-                    "history": history_list(&st)
+                    "devices": devices
                 })
                 .to_string()
                 .into(),
@@ -712,19 +649,6 @@ fn broadcast_text(st: &AppState, from_id: &str, value: &str) {
         if id != from_id {
             let _ = d.sender.send(msg.clone());
         }
-    }
-    // 记录接收历史（仅来自设备，主机发出的文本不计入）
-    if from_id != "host" {
-        let rec = HistoryRecord {
-            id: uuid::Uuid::new_v4().to_string(),
-            kind: "text".into(),
-            name: value.chars().take(48).collect::<String>(),
-            value: value.to_string(),
-            size: 0,
-            source: label.clone(),
-            created: now_secs(),
-        };
-        push_history(st, rec);
     }
 }
 

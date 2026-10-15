@@ -115,6 +115,7 @@
             <input id="file" type="file" multiple />
             <button id="upload" class="primary">上传</button>
           </div>
+          <div id="up-msg" class="muted" style="margin-top: 8px"></div>
         </div>
 
         <div class="card">
@@ -283,29 +284,58 @@
           connected = false;
           setConnected(false);
         };
+        // 选中文件后立即缓存（移动端异步后 input.files 可能失效）
+        var pickedFiles = [];
+        function upMsg(t) { var el = $("up-msg"); if (el) el.textContent = t || ""; }
+        $("file").onchange = function () {
+          pickedFiles = [];
+          var f = $("file").files;
+          for (var i = 0; i < f.length; i++) pickedFiles.push(f[i]);
+          upMsg(pickedFiles.length ? ("已选择 " + pickedFiles.length + " 个文件") : "");
+        };
+
         $("upload").onclick = function () {
-          var input = $("file");
-          if (!input.files.length) { showMsg("请先选择要上传的文件"); return; }
-          var total = input.files.length, done = 0, fail = 0;
-          for (var i = 0; i < input.files.length; i++) {
+          var files = pickedFiles.length ? pickedFiles : (function () {
+            // 兜底：若 change 未触发，尝试读取 input.files
+            var arr = [], f = $("file").files;
+            for (var i = 0; i < f.length; i++) arr.push(f[i]);
+            return arr;
+          })();
+          if (!files.length) { upMsg("请先选择要上传的文件"); return; }
+          if (!pwd) { upMsg("未获取到连接密码，请重新连接"); return; }
+          if (!connected) { upMsg("未连接，请先连接"); return; }
+          var total = files.length, done = 0, fail = 0, firstErr = "";
+          upMsg("上传中… 0/" + total);
+          var finish = function () {
+            if (done + fail < total) return;
+            pickClear();
+            if (done && !fail) upMsg("已上传 " + done + " 个文件");
+            else if (done && fail) upMsg("上传 " + done + " 个，失败 " + fail + " 个" + (firstErr ? "（" + firstErr + "）" : ""));
+            else upMsg("上传失败：" + (firstErr || "请检查连接后重试"));
+            refreshFiles();
+          };
+          files.forEach(function (file, idx) {
             var fd = new FormData();
-            fd.append("file", input.files[i]);
+            fd.append("file", file, file.name || ("file" + idx));
             fetch(base + "/api/upload?pwd=" + encodeURIComponent(pwd) + "&name=" + encodeURIComponent(name), { method: "POST", body: fd })
               .then(function (r) {
-                if (r.ok) done++; else fail++;
+                if (r.ok) { done++; }
+                else { fail++; if (!firstErr) firstErr = "HTTP " + r.status; }
               })
-              .catch(function () { fail++; })
+              .catch(function (e) {
+                fail++; if (!firstErr) firstErr = (e && e.message) || "网络错误";
+              })
               .then(function () {
-                if (done + fail === total) {
-                  input.value = "";
-                  if (done && !fail) setStatus(true, "已上传 " + done + " 个文件");
-                  else if (done && fail) setStatus(true, "上传 " + done + " 个，失败 " + fail + " 个");
-                  else { showMsg("上传失败，请检查连接"); setStatus(true, "已连接"); }
-                  refreshFiles();
-                }
+                upMsg("上传中… " + (done + fail) + "/" + total);
+                finish();
               });
-          }
+          });
         };
+        function pickClear() {
+          pickedFiles = [];
+          var inp = $("file");
+          try { inp.value = ""; } catch (e) {}
+        }
         $("send").onclick = function () {
           var v = $("out").value;
           if (v) send({ type: "text", value: v });
