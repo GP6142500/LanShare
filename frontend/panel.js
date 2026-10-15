@@ -163,6 +163,7 @@
     box.innerHTML = "";
     if (!list.length) {
       box.innerHTML = '<div class="empty">暂无已连接设备</div>';
+      renderHomeDevices([]);
       return;
     }
     list.forEach((d) => {
@@ -182,6 +183,31 @@
       };
       item.querySelector(".acts").appendChild(btn);
       box.appendChild(item);
+    });
+    renderHomeDevices(list);
+  }
+
+  // 首页底部：已连接设备以小卡片展示（宽度自适应、可并排换行）
+  function renderHomeDevices(list) {
+    const box = $("home-devices");
+    if (!box) return;
+    box.innerHTML = "";
+    if (!list.length) {
+      box.innerHTML = '<div class="empty">暂无设备连接</div>';
+      return;
+    }
+    list.forEach((d) => {
+      const chip = document.createElement("div");
+      chip.className = "dev-chip";
+      chip.title = d.name + "（连接于 " + fmtTime(d.connected_at) + "）";
+      const dot = document.createElement("span");
+      dot.className = "dev-chip-dot";
+      const name = document.createElement("span");
+      name.className = "dev-chip-name";
+      name.textContent = d.name;
+      chip.appendChild(dot);
+      chip.appendChild(name);
+      box.appendChild(chip);
     });
   }
   function fmtTime(secs) {
@@ -399,6 +425,7 @@
     loadConfig();
     refreshStatus();
     connect();
+    refreshDevices();
     setTimeout(refreshFiles, 800);
     setInterval(refreshStatus, 3000);
     setInterval(refreshDevices, 3000);

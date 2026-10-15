@@ -462,6 +462,49 @@ textarea:focus {
   padding: 8px 2px;
 }
 
+/* 首页「已连接设备」自适应小卡片：宽度随文字自适应，可并排换行，有最大宽度 */
+.dev-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.dev-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 180px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--accent-soft);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.dev-chip .dev-chip-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #22c55e;
+}
+
+/* 名称过长时省略，避免撑破最大宽度 */
+.dev-chip .dev-chip-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dev-chips .empty {
+  padding: 4px 2px;
+}
+
 .badge {
   font-size: 11px;
   padding: 2px 8px;
