@@ -147,7 +147,7 @@
       (function () {
         var base = location.origin;
         var proto = location.protocol === "https:" ? "wss" : "ws";
-        var ws = null, retry = null, connected = false;
+        var ws = null, retry = null, connected = false, keepClosed = false;
         var pwd = sessionStorage.getItem("lanshare_pwd") || "";
         var name = sessionStorage.getItem("lanshare_name") || detectName();
 
@@ -243,9 +243,9 @@
           };
           ws.onclose = function () {
             setConnected(false);
-            if (connected) return;
+            if (keepClosed || connected) return;
             if (!retry) retry = setInterval(function () {
-              if (!connected) connect();
+              if (!connected && !keepClosed) connect();
             }, 3000);
           };
           ws.onmessage = function (ev) {
@@ -255,6 +255,7 @@
               if (m.role === "device") setStatus(true, "连接中…");
             } else if (m.type === "paired") {
               if (m.ok) {
+                keepClosed = false;
                 setConnected(true);
                 refreshFiles();
               } else {
@@ -276,6 +277,8 @@
           else connect();
         };
         $("disconnect").onclick = function () {
+          keepClosed = true;
+          if (retry) { clearInterval(retry); retry = null; }
           if (ws) ws.close();
           connected = false;
           setConnected(false);

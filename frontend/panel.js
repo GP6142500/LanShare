@@ -10,14 +10,18 @@
   const $ = (id) => document.getElementById(id);
 
   async function invoke(name, args) {
-    try {
-      if (window.__TAURI__ && window.__TAURI__.core) {
-        return await window.__TAURI__.core.invoke(name, args || {});
-      }
-    } catch (e) {
-      console.error("[invoke]", name, e);
+    if (window.__TAURI__ && window.__TAURI__.core) {
+      return await window.__TAURI__.core.invoke(name, args || {});
     }
     return null;
+  }
+  async function safe(name, args) {
+    try {
+      return await invoke(name, args);
+    } catch (e) {
+      console.error("[invoke]", name, e);
+      return null;
+    }
   }
 
   function base() {
@@ -56,7 +60,7 @@
   }
 
   async function refreshStatus() {
-    const r = await invoke("is_running");
+    const r = await safe("is_running");
     const running = !!r;
     setServiceUI(running);
     if (running && !ws) {
@@ -64,6 +68,10 @@
       connect();
     } else if (!running) {
       wantConnect = false;
+      if (retry) {
+        clearInterval(retry);
+        retry = null;
+      }
       if (ws) {
         ws.close();
         ws = null;
@@ -72,12 +80,12 @@
   }
 
   $("svc-toggle").onclick = async () => {
-    const r = await invoke("is_running");
+    const r = await safe("is_running");
     if (r) {
-      await invoke("stop_service");
+      await safe("stop_service");
       toast("服务已停止");
     } else {
-      await invoke("start_service");
+      await safe("start_service");
       toast("服务已启动");
     }
     await refreshStatus();
@@ -85,7 +93,7 @@
 
   // ----------------- 配置 / 二维码 -----------------
   async function loadConfig() {
-    const c = await invoke("get_config");
+    const c = await safe("get_config");
     if (c) {
       cfg = c;
       serverPort = c.port;
@@ -126,7 +134,7 @@
     renderPwd();
   };
   $("pwd-reset").onclick = async () => {
-    const p = await invoke("regenerate_password");
+    const p = await safe("regenerate_password");
     if (p) {
       hostPassword = p;
       renderPwd();
@@ -137,7 +145,7 @@
 
   // ----------------- 已连接设备 -----------------
   async function refreshDevices() {
-    const ds = await invoke("get_devices");
+    const ds = await safe("get_devices");
     if (ds) renderDevices(ds);
   }
   function renderDevices(list) {
@@ -159,7 +167,7 @@
       btn.className = "danger";
       btn.textContent = "断开";
       btn.onclick = async () => {
-        await invoke("disconnect_device", { id: d.id });
+        await safe("disconnect_device", { id: d.id });
         toast("已断开 " + d.name);
       };
       item.querySelector(".acts").appendChild(btn);
@@ -251,12 +259,12 @@
 
   // ----------------- 设置 -----------------
   $("storage-pick").onclick = async () => {
-    const p = await invoke("pick_dir");
+    const p = await safe("pick_dir");
     if (p) $("storage-input").value = p;
   };
   $("storage-open").onclick = () => {
     const p = $("storage-input").value;
-    if (p) invoke("open_dir", { path: p });
+    if (p) safe("open_dir", { path: p });
   };
   $("settings-save").onclick = async () => {
     const port = parseInt($("set-port").value, 10);
@@ -267,16 +275,14 @@
       msg.textContent = "密码必须是 6 位数字";
       return;
     }
-    const r = await invoke("save_settings", { port, password, storage_dir });
-    if (r === null) {
+    try {
+      await invoke("save_settings", { port, password, storage_dir });
       msg.textContent = "";
       toast("设置已保存");
       await loadConfig();
       await refreshStatus();
-    } else if (typeof r === "string") {
-      msg.textContent = r;
-    } else {
-      msg.textContent = "保存失败";
+    } catch (e) {
+      msg.textContent = typeof e === "string" ? e : "保存失败";
     }
   };
 
