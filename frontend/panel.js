@@ -193,6 +193,53 @@
     );
   }
 
+  // ----------------- 接收的文件 -----------------
+  function renderFiles(files) {
+    const box = $("file-list");
+    if (!box) return;
+    box.innerHTML = "";
+    const fs = (files || []).slice().reverse();
+    if (!fs.length) {
+      box.innerHTML = '<div class="empty">暂无接收的文件</div>';
+      return;
+    }
+    fs.forEach((f) => {
+      const item = document.createElement("div");
+      item.className = "item";
+      item.innerHTML =
+        '<div class="meta"><div class="name"></div><div class="sub"></div></div>' +
+        '<div class="acts"></div>';
+      item.querySelector(".name").textContent = f.name;
+      item.querySelector(".sub").textContent =
+        "来自 " + (f.uploader || "未知") + " · " + (f.size / 1024).toFixed(1) + " KB";
+      const dl = document.createElement("button");
+      dl.className = "ghost";
+      dl.textContent = "下载";
+      dl.onclick = () => {
+        const a = document.createElement("a");
+        a.href = base() + "/api/download/" + f.id + "?pwd=" + encodeURIComponent(hostPassword);
+        a.download = f.name;
+        a.click();
+      };
+      item.querySelector(".acts").appendChild(dl);
+      box.appendChild(item);
+    });
+  }
+  async function refreshFiles() {
+    if (!hostPassword) {
+      const c = await safe("get_config");
+      if (c) hostPassword = c.password || "";
+    }
+    if (!hostPassword) return;
+    try {
+      const r = await fetch(base() + "/api/files?pwd=" + encodeURIComponent(hostPassword));
+      if (r.ok) {
+        const d = await r.json();
+        renderFiles(d.files || []);
+      }
+    } catch (e) {}
+  }
+
   // ----------------- 文本同步 -----------------
   function send(obj) {
     if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
@@ -257,6 +304,7 @@
     if (ok && !fail) toast("已上传 " + ok + " 个文件");
     else if (ok && fail) toast("已上传 " + ok + " 个，失败 " + fail + " 个");
     else toast("上传失败，请确认服务已启动");
+    refreshFiles();
   };
 
   // ----------------- 设置 -----------------
@@ -319,10 +367,14 @@
             serverPort = m.port || serverPort;
             renderPwd();
             renderDevices(m.devices || []);
+            renderFiles(m.files || []);
           }
           break;
         case "device_list":
           renderDevices(m.devices || []);
+          break;
+        case "file_list":
+          renderFiles(m.files || []);
           break;
         case "toast":
           toast(m.text);
@@ -347,8 +399,10 @@
     loadConfig();
     refreshStatus();
     connect();
+    setTimeout(refreshFiles, 800);
     setInterval(refreshStatus, 3000);
     setInterval(refreshDevices, 3000);
+    setInterval(refreshFiles, 4000);
   }
 
   if (window.__LAN_PORT) init();
