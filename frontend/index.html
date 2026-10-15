@@ -112,11 +112,18 @@
             <!-- 左：文本同步 -->
             <div class="card">
               <h3>文本同步</h3>
-              <div class="muted tx-label">所有设备共用同一个文本框，任意一端修改实时同步</div>
+              <div class="muted tx-label">多设备共享文本框，终端编辑实时互通。</div>
               <textarea id="text-shared" placeholder="在此输入，所有已连接设备实时同步…"></textarea>
               <div class="row" style="margin-top: 8px; justify-content: space-between">
                 <span class="muted" id="text-hint"></span>
-                <button class="ghost" id="text-copy">复制</button>
+                <div class="row" style="gap: 6px">
+                  <button class="icon-btn" id="text-clear" title="清空" aria-label="清空">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M19 6l-1 14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
+                  </button>
+                  <button class="icon-btn" id="text-copy" title="复制" aria-label="复制">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                  </button>
+                </div>
               </div>
             </div>
 

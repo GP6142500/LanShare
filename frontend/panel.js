@@ -325,6 +325,16 @@
     } catch (e) {}
   }
 
+  $("text-clear").onclick = () => {
+    if (!sharedText.value) return;
+    if (!window.confirm("确定清空共享文本框？所有设备的内容都会被清空。")) return;
+    if (textTimer) clearTimeout(textTimer);
+    sharedText.value = "";
+    send({ type: "text", value: "" });
+    $("text-hint").textContent = "已清空";
+    sharedText.focus();
+  };
+
   // ----------------- 分享文件 -----------------
   $("share-btn").onclick = async () => {
     const input = $("share-file");
