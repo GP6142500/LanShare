@@ -11,7 +11,7 @@ fn main() {
     tauri::Builder::default()
         .setup(|app| {
             let state = AppState::new();
-            let port = state.inner.cfg.lock().unwrap().port;
+            let port = state.port();
 
             // 启动 axum 局域网服务（独立 tokio 任务）
             tauri::async_runtime::spawn(server::run_server(state.clone()));

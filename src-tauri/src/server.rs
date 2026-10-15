@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+use ip::IpAddr as IfIpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -36,6 +37,7 @@ pub struct PairedDevice {
     pub token: String,
 }
 
+#[derive(Clone)]
 struct FileRecord {
     id: String,
     name: String,
@@ -66,6 +68,10 @@ struct PendingDevice {
 // ----------------------------- 状态初始化 -----------------------------
 
 impl AppState {
+    pub fn port(&self) -> u16 {
+        self.inner.cfg.lock().unwrap().port
+    }
+
     pub fn new() -> Self {
         AppState {
             inner: Arc::new(Inner {
@@ -117,13 +123,13 @@ fn save_config(cfg: &Config) {
 
 pub fn lan_ips() -> Vec<String> {
     let mut v = Vec::new();
-    if let Ok(ifaces) = get_if_addrs::get_if_addrs() {
-        for i in ifaces {
-            if !i.is_loopback() {
-                if let std::net::IpAddr::V4(ip) = i.addr {
-                    v.push(ip.to_string());
-                }
+    for i in get_if_addrs::getifaddrs() {
+        if let IfIpAddr::V4(v4) = i.addr {
+            let s = v4.to_string();
+            if s.starts_with("127.") {
+                continue;
             }
+            v.push(s);
         }
     }
     v
@@ -337,7 +343,7 @@ async fn handle_socket(
         "host".to_string()
     } else {
         let token = q.get("token").cloned().unwrap_or_default();
-        let mut cfg = st.inner.cfg.lock().unwrap();
+        let cfg = st.inner.cfg.lock().unwrap();
         if token == cfg.host_token {
             drop(cfg);
             uuid::Uuid::new_v4().to_string()
@@ -382,15 +388,16 @@ async fn handle_socket(
     let _ = sender.send(Message::Text(welcome.to_string())).await;
 
     if role == "host" {
-        let cfg = st.inner.cfg.lock().unwrap();
-        let paired: Vec<_> = cfg
-            .paired
-            .iter()
-            .map(|d| json!({ "id": d.id, "name": d.name }))
-            .collect();
+        let paired_json = {
+            let cfg = st.inner.cfg.lock().unwrap();
+            cfg.paired
+                .iter()
+                .map(|d| json!({ "id": d.id, "name": d.name }))
+                .collect::<Vec<_>>()
+        };
         let _ = sender
             .send(
-                json!({ "type": "paired_list", "devices": paired })
+                json!({ "type": "paired_list", "devices": paired_json })
                     .to_string()
                     .into(),
             )
