@@ -276,7 +276,7 @@
       return;
     }
     try {
-      await invoke("save_settings", { port, password, storage_dir });
+      await invoke("save_settings", { port, password, storageDir: storage_dir });
       msg.textContent = "";
       toast("设置已保存");
       await loadConfig();

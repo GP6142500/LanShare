@@ -47,7 +47,7 @@
         <section class="view active" id="view-home">
           <div class="view-head">
             <h2>首页</h2>
-            <p>连接信息与局域网服务控制</p>
+            <p>连接信息、服务控制与连接密码</p>
           </div>
 
           <div class="card">
@@ -80,6 +80,29 @@
           </div>
 
           <div class="card">
+            <h3>连接密码</h3>
+            <div class="muted" style="margin-bottom: 8px">其他设备打开网址后，输入此密码即可自动连接。在「设置」中可修改。</div>
+            <div class="row">
+              <input id="pwd-display" type="text" readonly value="······" />
+              <button class="ghost" id="pwd-toggle">显示</button>
+              <button id="pwd-reset" class="ghost">重置密码</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- 配对设备 -->
+        <section class="view" id="view-devices">
+          <div class="view-head">
+            <h2>配对设备</h2>
+            <p>已连接设备、文件互传与文本同步</p>
+          </div>
+
+          <div class="card">
+            <h3>已连接设备</h3>
+            <div id="device-list" class="list"></div>
+          </div>
+
+          <div class="card">
             <h3>文本同步</h3>
             <div class="muted" style="margin-bottom: 8px">输入并发送后，所有已连接设备实时收到；也可复制他人发来的文本</div>
             <textarea id="text-out" placeholder="在此输入要同步的文本，点发送…"></textarea>
@@ -96,7 +119,7 @@
           </div>
 
           <div class="card">
-            <h3>分享文件（给设备下载）</h3>
+            <h3>传送文件（分享给设备下载）</h3>
             <div class="row">
               <input id="share-file" type="file" multiple />
               <button class="primary" id="share-btn">上传分享</button>
@@ -106,29 +129,6 @@
           <div class="card">
             <h3>接收历史</h3>
             <div id="file-list" class="list"></div>
-          </div>
-        </section>
-
-        <!-- 配对设备 -->
-        <section class="view" id="view-devices">
-          <div class="view-head">
-            <h2>配对设备</h2>
-            <p>连接密码与已连接的设备</p>
-          </div>
-
-          <div class="card">
-            <h3>连接密码</h3>
-            <div class="muted" style="margin-bottom: 8px">其他设备打开网址后，输入此密码即可自动连接。</div>
-            <div class="row">
-              <input id="pwd-display" type="text" readonly value="······" />
-              <button class="ghost" id="pwd-toggle">显示</button>
-              <button id="pwd-reset" class="ghost">重置密码</button>
-            </div>
-          </div>
-
-          <div class="card">
-            <h3>已连接设备</h3>
-            <div id="device-list" class="list"></div>
           </div>
         </section>
 
