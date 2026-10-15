@@ -13,9 +13,9 @@
       {
         "label": "main",
         "title": "LanShare · 局域网互传",
-        "width": 920,
-        "height": 680,
-        "minWidth": 720,
+        "width": 980,
+        "height": 700,
+        "minWidth": 760,
         "minHeight": 560,
         "resizable": true,
         "fullscreen": false,
@@ -24,7 +24,8 @@
     ],
     "security": {
       "csp": null
-    }
+    },
+    "withGlobalTauri": true
   },
   "bundle": {
     "active": true,

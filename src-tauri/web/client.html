@@ -56,7 +56,7 @@
       button:disabled { opacity: .5; cursor: default; }
       button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
       button.ghost { background: transparent; border-color: transparent; color: var(--accent); padding: 4px 8px; }
-      input[type="text"], input[type="file"] { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--border); border-radius: 9px; padding: 8px 11px; width: 100%; }
+      input[type="text"], input[type="password"], input[type="file"] { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--border); border-radius: 9px; padding: 9px 11px; width: 100%; }
       input:focus { outline: none; border-color: var(--accent); }
       .list { display: flex; flex-direction: column; gap: 8px; }
       .item { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; }
@@ -67,8 +67,10 @@
       textarea:focus { outline: none; border-color: var(--accent); }
       .empty { color: var(--muted); font-size: 13px; padding: 6px 2px; }
       .banner { padding: 12px; border-radius: 10px; background: var(--accent-soft); color: var(--accent); font-size: 13px; margin-bottom: 12px; }
+      .banner.err { background: rgba(239,68,68,.1); color: #ef4444; }
       hr.sep { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
       .hidden { display: none; }
+      .pwd-input { letter-spacing: 4px; font-size: 18px; text-align: center; }
     </style>
   </head>
   <body>
@@ -85,44 +87,58 @@
         </div>
         <div class="status">
           <span id="dot" class="dot"></span>
-          <span id="stext">连接中…</span>
+          <span id="stext">未连接</span>
         </div>
       </div>
 
-      <div id="need-pair" class="banner hidden">已发送配对请求，请在电脑上的 LanShare 控制面板点击「批准」。</div>
-
-      <div class="card">
-        <h2>我的设备名</h2>
-        <div class="row">
-          <input id="name" type="text" placeholder="例如：我的手机" />
-          <button id="name-save" class="primary">保存</button>
+      <!-- 连接卡片 -->
+      <div id="connect-card" class="card">
+        <h2>连接这台电脑</h2>
+        <div class="muted" style="margin-bottom: 10px">请输入电脑上显示的连接密码。</div>
+        <input id="pwd" class="pwd-input" type="password" inputmode="numeric" maxlength="6" placeholder="6 位连接密码" />
+        <div style="margin-top: 10px">
+          <input id="name" type="text" placeholder="设备名（如：我的手机）" />
         </div>
+        <div class="row" style="margin-top: 12px; justify-content: flex-end">
+          <button id="connect" class="primary">连接</button>
+        </div>
+        <div id="conn-msg" class="banner err hidden" style="margin-top: 10px"></div>
       </div>
 
-      <div class="card">
-        <h2>发送文件到电脑</h2>
-        <div class="row">
-          <input id="file" type="file" multiple />
-          <button id="upload" class="primary" disabled>上传</button>
-        </div>
-      </div>
+      <!-- 已连接区域 -->
+      <div id="main-area" class="hidden">
+        <div class="banner">已连接。可发送文件 / 文本，或下载电脑分享的文件。</div>
 
-      <div class="card">
-        <h2>可下载文件</h2>
-        <div id="files" class="list"><div class="empty">暂无文件</div></div>
-      </div>
-
-      <div class="card">
-        <h2>文本同步</h2>
-        <textarea id="out" placeholder="输入文本，点发送…"></textarea>
-        <div class="row" style="margin-top: 10px; justify-content: space-between">
-          <button id="send" class="primary">发送</button>
-          <span class="muted" id="hint"></span>
+        <div class="card">
+          <h2>发送文件到电脑</h2>
+          <div class="row">
+            <input id="file" type="file" multiple />
+            <button id="upload" class="primary">上传</button>
+          </div>
         </div>
-        <hr class="sep" />
-        <textarea id="in" readonly placeholder="收到的文本"></textarea>
-        <div class="row" style="margin-top: 8px; justify-content: flex-end">
-          <button id="copy" class="ghost">复制</button>
+
+        <div class="card">
+          <h2>可下载文件</h2>
+          <div id="files" class="list"><div class="empty">暂无文件</div></div>
+        </div>
+
+        <div class="card">
+          <h2>文本同步</h2>
+          <textarea id="out" placeholder="输入文本，点发送…"></textarea>
+          <div class="row" style="margin-top: 10px; justify-content: space-between">
+            <button id="send" class="primary">发送</button>
+            <span class="muted" id="hint"></span>
+          </div>
+          <hr class="sep" />
+          <div class="muted" style="margin-bottom: 6px">收到的文本</div>
+          <textarea id="in" readonly placeholder="收到的文本"></textarea>
+          <div class="row" style="margin-top: 8px; justify-content: flex-end">
+            <button id="copy" class="ghost">复制</button>
+          </div>
+        </div>
+
+        <div class="row" style="justify-content: flex-end">
+          <button id="disconnect" class="ghost">断开连接</button>
         </div>
       </div>
     </div>
@@ -130,26 +146,51 @@
     <script>
       (function () {
         var base = location.origin;
-        var token = localStorage.getItem("lanshare_token") || "";
-        var name = localStorage.getItem("lanshare_name") || "我的设备";
-        var ws = null, retry = null, paired = !!token;
+        var proto = location.protocol === "https:" ? "wss" : "ws";
+        var ws = null, retry = null, connected = false;
+        var pwd = sessionStorage.getItem("lanshare_pwd") || "";
+        var name = sessionStorage.getItem("lanshare_name") || detectName();
 
         var $ = function (id) { return document.getElementById(id); };
+        $("pwd").value = pwd;
         $("name").value = name;
 
-        function setStatus(on) {
-          $("dot").className = "dot " + (on ? "on" : "off");
-          $("stext").textContent = on ? "已连接" : "连接断开，重试中…";
+        function detectName() {
+          var ua = navigator.userAgent;
+          if (/iPhone|iPad|iPod/.test(ua)) return "iPhone";
+          if (/Android/.test(ua)) return "Android";
+          if (/Windows/.test(ua)) return "Windows";
+          if (/Mac/.test(ua)) return "Mac";
+          return "我的设备";
         }
-        function setPaired(p) {
-          paired = p;
-          $("upload").disabled = !p;
-          if (p) $("need-pair").classList.add("hidden");
+
+        function setStatus(on, text) {
+          $("dot").className = "dot " + (on ? "on" : "off");
+          $("stext").textContent = text || (on ? "已连接" : "未连接");
+        }
+
+        function showMsg(text) {
+          var el = $("conn-msg");
+          if (text) { el.textContent = text; el.classList.remove("hidden"); }
+          else el.classList.add("hidden");
+        }
+
+        function setConnected(p) {
+          connected = p;
+          if (p) {
+            $("connect-card").classList.add("hidden");
+            $("main-area").classList.remove("hidden");
+            setStatus(true, "已连接");
+          } else {
+            $("connect-card").classList.remove("hidden");
+            $("main-area").classList.add("hidden");
+            setStatus(false, "未连接");
+          }
         }
 
         function refreshFiles() {
-          if (!paired) return;
-          fetch(base + "/api/files")
+          if (!connected) return;
+          fetch(base + "/api/files?pwd=" + encodeURIComponent(pwd))
             .then(function (r) { return r.json(); })
             .then(function (d) {
               var box = $("files");
@@ -167,7 +208,7 @@
                 dl.textContent = "下载";
                 dl.onclick = function () {
                   var a = document.createElement("a");
-                  a.href = base + "/api/download/" + f.id + "?token=" + encodeURIComponent(token);
+                  a.href = base + "/api/download/" + f.id + "?pwd=" + encodeURIComponent(pwd);
                   a.download = f.name;
                   a.click();
                 };
@@ -182,58 +223,69 @@
           if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
         }
 
+        function doPair() {
+          if (!ws || ws.readyState !== 1) return;
+          pwd = $("pwd").value.trim();
+          name = $("name").value.trim() || detectName();
+          sessionStorage.setItem("lanshare_pwd", pwd);
+          sessionStorage.setItem("lanshare_name", name);
+          send({ type: "pair", password: pwd, name: name });
+          showMsg("");
+        }
+
         function connect() {
-          var q = "role=device&name=" + encodeURIComponent(name);
-          if (token) q += "&token=" + encodeURIComponent(token);
-          ws = new WebSocket(base + "/ws?" + q);
+          if (ws && (ws.readyState === 0 || ws.readyState === 1)) return;
+          ws = new WebSocket(proto + "://" + location.host + "/ws?role=device&name=" + encodeURIComponent(name));
           ws.onopen = function () {
-            setStatus(true);
+            setStatus(true, "连接中…");
             if (retry) clearInterval(retry);
-            refreshFiles();
+            doPair();
           };
           ws.onclose = function () {
-            setStatus(false);
-            if (!retry) retry = setInterval(connect, 2500);
+            setConnected(false);
+            if (connected) return;
+            if (!retry) retry = setInterval(function () {
+              if (!connected) connect();
+            }, 3000);
           };
           ws.onmessage = function (ev) {
             var m;
             try { m = JSON.parse(ev.data); } catch (e) { return; }
             if (m.type === "welcome") {
-              if (m.role === "device") setPaired(m.paired);
+              if (m.role === "device") setStatus(true, "连接中…");
             } else if (m.type === "paired") {
-              token = m.token;
-              name = m.name || name;
-              localStorage.setItem("lanshare_token", token);
-              localStorage.setItem("lanshare_name", name);
-              setPaired(true);
-              refreshFiles();
-            } else if (m.type === "revoked") {
-              token = "";
-              localStorage.removeItem("lanshare_token");
-              setPaired(false);
-              $("need-pair").classList.remove("hidden");
+              if (m.ok) {
+                setConnected(true);
+                refreshFiles();
+              } else {
+                showMsg(m.error || "连接失败");
+                setStatus(false, "未连接");
+              }
+            } else if (m.type === "disconnected") {
+              setConnected(false);
+              showMsg("已被主机关断");
             } else if (m.type === "text") {
               $("in").value = m.value;
-              $("hint").textContent = "来自电脑";
+              $("hint").textContent = "来自 " + (m.from || "电脑");
             }
           };
         }
 
-        // 未配对时提示
-        if (!token) $("need-pair").classList.remove("hidden");
-
-        $("name-save").onclick = function () {
-          name = $("name").value.trim() || "我的设备";
-          localStorage.setItem("lanshare_name", name);
+        $("connect").onclick = function () {
+          if (ws && ws.readyState === 1) doPair();
+          else connect();
+        };
+        $("disconnect").onclick = function () {
           if (ws) ws.close();
-          connect();
+          connected = false;
+          setConnected(false);
         };
         $("upload").onclick = function () {
           var input = $("file");
           for (var i = 0; i < input.files.length; i++) {
             var fd = new FormData();
             fd.append("file", input.files[i]);
-            fetch(base + "/api/upload?token=" + encodeURIComponent(token), { method: "POST", body: fd })
+            fetch(base + "/api/upload?pwd=" + encodeURIComponent(pwd) + "&name=" + encodeURIComponent(name), { method: "POST", body: fd })
               .catch(function () {});
           }
           input.value = "";

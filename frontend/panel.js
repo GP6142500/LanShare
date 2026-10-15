@@ -1,39 +1,112 @@
 // LanShare 控制面板逻辑（主机端，role=host）
 (function () {
-  let port = window.__LAN_PORT || 18765;
-  let hostToken = "";
+  let serverPort = window.__LAN_PORT || 18765;
+  let hostPassword = "";
+  let cfg = { port: serverPort, password: "", storage_dir: "", auto_start: true };
   let ws = null;
+  let wantConnect = false;
   let retry = null;
 
   const $ = (id) => document.getElementById(id);
 
-  function base() {
-    return `http://127.0.0.1:${port}`;
+  async function invoke(name, args) {
+    try {
+      if (window.__TAURI__ && window.__TAURI__.core) {
+        return await window.__TAURI__.core.invoke(name, args || {});
+      }
+    } catch (e) {
+      console.error("[invoke]", name, e);
+    }
+    return null;
   }
 
-  function setStatus(on) {
-    $("status-dot").className = "dot " + (on ? "on" : "off");
-    $("status-text").textContent = on ? "服务在线" : "连接断开，重试中…";
+  function base() {
+    return `http://127.0.0.1:${serverPort}`;
   }
+
+  // ----------------- 导航切换 -----------------
+  function initNav() {
+    document.querySelectorAll(".nav-item").forEach((btn) => {
+      btn.onclick = () => {
+        document.querySelectorAll(".nav-item").forEach((b) => b.classList.remove("active"));
+        document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
+        btn.classList.add("active");
+        $("view-" + btn.dataset.view).classList.add("active");
+      };
+    });
+  }
+
+  // ----------------- Toast -----------------
+  let toastTimer = null;
+  function toast(text) {
+    const t = $("toast");
+    t.textContent = text;
+    t.classList.remove("hidden");
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => t.classList.add("hidden"), 2600);
+  }
+
+  // ----------------- 服务状态 -----------------
+  function setServiceUI(running) {
+    $("svc-dot").className = "dot " + (running ? "on" : "off");
+    $("side-dot").className = "dot " + (running ? "on" : "off");
+    $("svc-text").textContent = running ? "服务运行中" : "服务已停止";
+    $("side-text").textContent = running ? "服务运行中" : "服务已停止";
+    $("svc-toggle").textContent = running ? "停止服务" : "启动服务";
+  }
+
+  async function refreshStatus() {
+    const r = await invoke("is_running");
+    const running = !!r;
+    setServiceUI(running);
+    if (running && !ws) {
+      wantConnect = true;
+      connect();
+    } else if (!running) {
+      wantConnect = false;
+      if (ws) {
+        ws.close();
+        ws = null;
+      }
+    }
+  }
+
+  $("svc-toggle").onclick = async () => {
+    const r = await invoke("is_running");
+    if (r) {
+      await invoke("stop_service");
+      toast("服务已停止");
+    } else {
+      await invoke("start_service");
+      toast("服务已启动");
+    }
+    await refreshStatus();
+  };
 
   // ----------------- 配置 / 二维码 -----------------
   async function loadConfig() {
+    const c = await invoke("get_config");
+    if (c) {
+      cfg = c;
+      serverPort = c.port;
+      hostPassword = c.password || "";
+      $("storage-input").value = c.storage_dir || "";
+      $("set-pwd").value = c.password || "";
+      $("set-port").value = c.port;
+    }
     try {
       const r = await fetch(base() + "/api/config");
-      const c = await r.json();
+      const d = await r.json();
       const list = $("ip-list");
       list.innerHTML = "";
-      (c.lan_ips || []).forEach((ip) => {
+      (d.lan_ips || []).forEach((ip) => {
         const el = document.createElement("span");
         el.className = "ip-chip";
-        el.textContent = ip + ":" + c.port;
+        el.textContent = ip + ":" + d.port;
         list.appendChild(el);
       });
-      $("client-url").textContent = c.client_url;
-      $("storage-input").value = c.storage_dir || "";
-    } catch (e) {
-      /* ignore */
-    }
+      $("client-url").textContent = d.client_url;
+    } catch (e) {}
     try {
       const svg = await (await fetch(base() + "/api/qr")).text();
       $("qr-box").innerHTML = svg;
@@ -42,107 +115,187 @@
     }
   }
 
-  // ----------------- 文件列表 -----------------
-  async function refreshFiles() {
-    try {
-      const r = await fetch(base() + "/api/files");
-      const d = await r.json();
-      const box = $("file-list");
-      box.innerHTML = "";
-      const files = d.files || [];
-      if (!files.length) {
-        box.innerHTML = '<div class="empty">暂无文件</div>';
-        return;
-      }
-      files
-        .slice()
-        .reverse()
-        .forEach((f) => {
-          const item = document.createElement("div");
-          item.className = "item";
-          item.innerHTML =
-            '<div class="meta"><div class="name"></div><div class="sub"></div></div>' +
-            '<div class="acts"></div>';
-          item.querySelector(".name").textContent = f.name;
-          item.querySelector(".sub").textContent =
-            f.uploader + " · " + (f.size / 1024).toFixed(1) + " KB";
-          const dl = document.createElement("button");
-          dl.className = "ghost";
-          dl.textContent = "下载";
-          dl.onclick = () => {
-            const a = document.createElement("a");
-            a.href = base() + "/api/download/" + f.id + "?token=" + encodeURIComponent(hostToken);
-            a.download = f.name;
-            a.click();
-          };
-          item.querySelector(".acts").appendChild(dl);
-          box.appendChild(item);
-        });
-    } catch (e) {}
+  // ----------------- 密码展示 -----------------
+  let pwdShown = false;
+  function renderPwd() {
+    $("pwd-display").value = pwdShown ? hostPassword : "······";
   }
-
-  // ----------------- 配对 -----------------
-  function renderPending() {
-    $("pending-list").innerHTML = "";
-  }
-  function showPending(id, name) {
-    const box = $("pending-list");
-    let item = document.getElementById("pend-" + id);
-    if (!item) {
-      item = document.createElement("div");
-      item.className = "item";
-      item.id = "pend-" + id;
-      item.innerHTML =
-        '<div class="meta"><div class="name"></div><div class="sub">请求配对</div></div>' +
-        '<div class="acts"></div>';
-      const ok = document.createElement("button");
-      ok.className = "primary";
-      ok.textContent = "批准";
-      ok.onclick = () => send({ type: "pair_approve", id });
-      item.querySelector(".acts").appendChild(ok);
-      box.appendChild(item);
+  $("pwd-toggle").onclick = () => {
+    pwdShown = !pwdShown;
+    $("pwd-toggle").textContent = pwdShown ? "隐藏" : "显示";
+    renderPwd();
+  };
+  $("pwd-reset").onclick = async () => {
+    const p = await invoke("regenerate_password");
+    if (p) {
+      hostPassword = p;
+      renderPwd();
+      $("set-pwd").value = p;
+      toast("连接密码已重置");
     }
-    item.querySelector(".name").textContent = name;
+  };
+
+  // ----------------- 已连接设备 -----------------
+  async function refreshDevices() {
+    const ds = await invoke("get_devices");
+    if (ds) renderDevices(ds);
   }
-  function clearPending(id) {
-    const el = document.getElementById("pend-" + id);
-    if (el) el.remove();
-  }
-  function renderPaired(devices) {
-    const box = $("paired-list");
+  function renderDevices(list) {
+    const box = $("device-list");
     box.innerHTML = "";
-    (devices || []).forEach((d) => {
+    if (!list.length) {
+      box.innerHTML = '<div class="empty">暂无已连接设备</div>';
+      return;
+    }
+    list.forEach((d) => {
       const item = document.createElement("div");
       item.className = "item";
       item.innerHTML =
-        '<div class="meta"><div class="name"></div><div class="sub">已配对</div></div>' +
+        '<div class="meta"><div class="name"></div><div class="sub"></div></div>' +
         '<div class="acts"></div>';
       item.querySelector(".name").textContent = d.name;
-      const rv = document.createElement("button");
-      rv.className = "danger";
-      rv.textContent = "撤销";
-      rv.onclick = () => send({ type: "revoke", id: d.id });
-      item.querySelector(".acts").appendChild(rv);
+      item.querySelector(".sub").textContent = "连接于 " + fmtTime(d.connected_at);
+      const btn = document.createElement("button");
+      btn.className = "danger";
+      btn.textContent = "断开";
+      btn.onclick = async () => {
+        await invoke("disconnect_device", { id: d.id });
+        toast("已断开 " + d.name);
+      };
+      item.querySelector(".acts").appendChild(btn);
+      box.appendChild(item);
+    });
+  }
+  function fmtTime(secs) {
+    if (!secs) return "";
+    const d = new Date(secs * 1000);
+    const p = (n) => (n < 10 ? "0" + n : "" + n);
+    return (
+      p(d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes())
+    );
+  }
+
+  // ----------------- 接收历史 -----------------
+  function renderFiles(files) {
+    const box = $("file-list");
+    box.innerHTML = "";
+    const fs = (files || []).slice().reverse();
+    if (!fs.length) {
+      box.innerHTML = '<div class="empty">暂无文件</div>';
+      return;
+    }
+    fs.forEach((f) => {
+      const item = document.createElement("div");
+      item.className = "item";
+      item.innerHTML =
+        '<div class="meta"><div class="name"></div><div class="sub"></div></div>' +
+        '<div class="acts"></div>';
+      item.querySelector(".name").textContent = f.name;
+      item.querySelector(".sub").textContent =
+        f.uploader + " · " + (f.size / 1024).toFixed(1) + " KB";
+      const dl = document.createElement("button");
+      dl.className = "ghost";
+      dl.textContent = "下载";
+      dl.onclick = () => {
+        const a = document.createElement("a");
+        a.href = base() + "/api/download/" + f.id + "?pwd=" + encodeURIComponent(hostPassword);
+        a.download = f.name;
+        a.click();
+      };
+      item.querySelector(".acts").appendChild(dl);
       box.appendChild(item);
     });
   }
 
-  // ----------------- WebSocket -----------------
+  // ----------------- 文本同步 -----------------
   function send(obj) {
     if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
   }
+  $("text-send").onclick = () => {
+    const v = $("text-out").value;
+    if (v) send({ type: "text", value: v });
+  };
+  $("text-copy").onclick = () => {
+    const v = $("text-in").value;
+    if (v) {
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(v).catch(fallbackCopy);
+      } else fallbackCopy();
+    }
+  };
+  function fallbackCopy() {
+    $("text-in").select();
+    try {
+      document.execCommand("copy");
+    } catch (e) {}
+  }
 
+  // ----------------- 分享文件 -----------------
+  $("share-btn").onclick = async () => {
+    const input = $("share-file");
+    const files = input.files;
+    if (!files.length) return;
+    for (const f of files) {
+      const fd = new FormData();
+      fd.append("file", f);
+      try {
+        await fetch(
+          base() + "/api/upload?pwd=" + encodeURIComponent(hostPassword) + "&name=" + encodeURIComponent("本机"),
+          { method: "POST", body: fd }
+        );
+      } catch (e) {}
+    }
+    input.value = "";
+    toast("已加入分享列表");
+  };
+
+  // ----------------- 设置 -----------------
+  $("storage-pick").onclick = async () => {
+    const p = await invoke("pick_dir");
+    if (p) $("storage-input").value = p;
+  };
+  $("storage-open").onclick = () => {
+    const p = $("storage-input").value;
+    if (p) invoke("open_dir", { path: p });
+  };
+  $("settings-save").onclick = async () => {
+    const port = parseInt($("set-port").value, 10);
+    const password = $("set-pwd").value.trim();
+    const storage_dir = $("storage-input").value.trim();
+    const msg = $("settings-msg");
+    if (!/^\d{6}$/.test(password)) {
+      msg.textContent = "密码必须是 6 位数字";
+      return;
+    }
+    const r = await invoke("save_settings", { port, password, storage_dir });
+    if (r === null) {
+      msg.textContent = "";
+      toast("设置已保存");
+      await loadConfig();
+      await refreshStatus();
+    } else if (typeof r === "string") {
+      msg.textContent = r;
+    } else {
+      msg.textContent = "保存失败";
+    }
+  };
+
+  // ----------------- WebSocket -----------------
   function connect() {
-    const url = `ws://127.0.0.1:${port}/ws?role=host`;
+    const url = `ws://127.0.0.1:${serverPort}/ws?role=host`;
     ws = new WebSocket(url);
     ws.onopen = () => {
-      setStatus(true);
+      setServiceUI(true);
       if (retry) clearInterval(retry);
-      refreshFiles();
     };
     ws.onclose = () => {
-      setStatus(false);
-      if (!retry) retry = setInterval(connect, 2500);
+      ws = null;
+      if (wantConnect) {
+        if (!retry)
+          retry = setInterval(() => {
+            if (wantConnect && !ws) connect();
+          }, 2500);
+      }
     };
     ws.onmessage = (ev) => {
       let m;
@@ -154,87 +307,44 @@
       switch (m.type) {
         case "welcome":
           if (m.role === "host") {
-            hostToken = m.token || "";
-            renderFilesInit(m.files);
+            hostPassword = m.password || hostPassword;
+            serverPort = m.port || serverPort;
+            renderPwd();
+            renderDevices(m.devices || []);
+            renderFiles(m.files || []);
           }
           break;
-        case "paired_list":
-          renderPaired(m.devices);
+        case "device_list":
+          renderDevices(m.devices || []);
           break;
-        case "pairing_request":
-          showPending(m.id, m.name);
+        case "toast":
+          toast(m.text);
           break;
-        case "device_paired":
-          clearPending(m.id);
-          break;
-        case "device_revoked":
-        case "device_left":
-          clearPending(m.id);
+        case "file_list":
+          renderFiles(m.files || []);
           break;
         case "text":
           $("text-in").value = m.value;
           $("text-hint").textContent = "来自 " + (m.from || "设备");
           break;
-        case "storage_updated":
-          $("storage-input").value = m.dir;
+        case "password_updated":
+          hostPassword = m.password || hostPassword;
+          renderPwd();
+          $("set-pwd").value = hostPassword;
           break;
       }
     };
   }
 
-  function renderFilesInit(files) {
-    // 首次以 welcome 的数据填充
-    const box = $("file-list");
-    if (files && files.length) refreshFiles();
-  }
-
-  // ----------------- 交互 -----------------
-  $("storage-save").onclick = () => {
-    const dir = $("storage-input").value.trim();
-    if (dir) send({ type: "set_storage", dir });
-  };
-  $("storage-open").onclick = () => {
-    // 控制面板无法直接打开文件夹（无 Tauri 插件），给出路径提示
-    const p = $("storage-input").value;
-    if (p) alert("请在资源管理器中打开：\n" + p);
-  };
-  $("share-btn").onclick = async () => {
-    const input = $("share-file");
-    const files = input.files;
-    if (!files.length) return;
-    for (const f of files) {
-      const fd = new FormData();
-      fd.append("file", f);
-      try {
-        await fetch(base() + "/api/upload?token=" + encodeURIComponent(hostToken), {
-          method: "POST",
-          body: fd,
-        });
-      } catch (e) {}
-    }
-    input.value = "";
-    refreshFiles();
-  };
-  $("text-send").onclick = () => {
-    const v = $("text-out").value;
-    if (v) send({ type: "text", value: v });
-  };
-  $("text-copy").onclick = () => {
-    const v = $("text-in").value;
-    if (v) {
-      navigator.clipboard?.writeText(v).catch(() => {
-        $("text-in").select();
-        document.execCommand("copy");
-      });
-    }
-  };
-
   // ----------------- 启动 -----------------
   function init() {
-    port = window.__LAN_PORT || 18765;
+    initNav();
+    renderPwd();
     loadConfig();
+    refreshStatus();
     connect();
-    setInterval(refreshFiles, 4000);
+    setInterval(refreshStatus, 3000);
+    setInterval(refreshDevices, 3000);
   }
 
   if (window.__LAN_PORT) init();

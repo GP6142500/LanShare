@@ -38,23 +38,29 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-.app {
-  max-width: 880px;
-  margin: 0 auto;
-  padding: 28px 20px 56px;
+.layout {
+  display: flex;
+  min-height: 100vh;
 }
 
-.header {
+.sidebar {
+  width: 212px;
+  flex-shrink: 0;
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  padding: 20px 14px;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 24px;
+  flex-direction: column;
+  position: sticky;
+  top: 0;
+  height: 100vh;
 }
 
 .brand {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 11px;
+  padding: 4px 8px 18px;
 }
 
 .logo {
@@ -68,7 +74,7 @@ body {
 }
 
 .brand h1 {
-  font-size: 17px;
+  font-size: 16px;
   font-weight: 600;
   margin: 0;
   letter-spacing: 0.2px;
@@ -76,16 +82,145 @@ body {
 
 .brand p {
   margin: 0;
-  font-size: 12px;
+  font-size: 11px;
   color: var(--muted);
 }
 
-.status {
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  padding: 9px 12px;
+  border-radius: 9px;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.nav-item:hover {
+  background: var(--accent-soft);
+  border-color: transparent;
+}
+
+.nav-item.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.nav-item.active svg {
+  stroke: #fff;
+}
+
+.nav-item svg {
+  stroke: var(--muted);
+}
+
+.side-status {
+  margin-top: auto;
   display: inline-flex;
   align-items: center;
   gap: 7px;
   font-size: 12px;
   color: var(--muted);
+  padding: 8px 12px;
+}
+
+.main {
+  flex: 1;
+  min-width: 0;
+  padding: 26px 28px 56px;
+}
+
+.view {
+  display: none;
+}
+.view.active {
+  display: block;
+}
+
+.view-head {
+  margin-bottom: 18px;
+}
+.view-head h2 {
+  font-size: 19px;
+  font-weight: 600;
+  margin: 0;
+}
+.view-head p {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.card h3 {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0 0 14px;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.row.between {
+  justify-content: space-between;
+}
+.row.top {
+  align-items: flex-start;
+}
+
+.toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--text);
+  color: var(--bg);
+  padding: 10px 16px;
+  border-radius: 10px;
+  font-size: 13px;
+  box-shadow: var(--shadow);
+  z-index: 50;
+  transition: opacity 0.2s;
+}
+.toast.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+@media (max-width: 760px) {
+  .layout {
+    flex-direction: column;
+  }
+  .sidebar {
+    width: 100%;
+    height: auto;
+    position: static;
+    flex-direction: row;
+    align-items: center;
+    padding: 12px;
+  }
+  .brand {
+    padding: 0 12px 0 4px;
+  }
+  .nav {
+    flex-direction: row;
+    flex: 1;
+  }
+  .side-status {
+    margin: 0;
+    padding: 0 8px;
+  }
 }
 
 .dot {
