@@ -225,6 +225,13 @@
     }
     return chip;
   }
+  function fmtSize(bytes) {
+    const b = bytes || 0;
+    if (b < 1024) return b + " B";
+    if (b < 1024 * 1024) return (b / 1024).toFixed(1) + " KB";
+    if (b < 1024 * 1024 * 1024) return (b / 1024 / 1024).toFixed(1) + " MB";
+    return (b / 1024 / 1024 / 1024).toFixed(2) + " GB";
+  }
   function fmtTime(secs) {
     if (!secs) return "";
     const d = new Date(secs * 1000);
@@ -234,35 +241,45 @@
     );
   }
 
-  // ----------------- 接收的文件 -----------------
+  // ----------------- 接收的文件（主机面板） -----------------
+  // 主机：点击文件行=用默认程序打开；右侧图标=打开文件所在位置
   function renderFiles(files) {
     const box = $("file-list");
     if (!box) return;
     box.innerHTML = "";
     const fs = (files || []).slice().reverse();
     if (!fs.length) {
-      box.innerHTML = '<div class="empty">暂无接收的文件</div>';
+      box.innerHTML = '<div class="empty">暂无文件</div>';
       return;
     }
     fs.forEach((f) => {
       const item = document.createElement("div");
-      item.className = "item";
+      item.className = "item clickable";
+      item.title = f.path ? "点击打开：" + f.path : "";
       item.innerHTML =
         '<div class="meta"><div class="name"></div><div class="sub"></div></div>' +
         '<div class="acts"></div>';
       item.querySelector(".name").textContent = f.name;
       item.querySelector(".sub").textContent =
-        "来自 " + (f.uploader || "未知") + " · " + (f.size / 1024).toFixed(1) + " KB";
-      const dl = document.createElement("button");
-      dl.className = "ghost";
-      dl.textContent = "下载";
-      dl.onclick = () => {
-        const a = document.createElement("a");
-        a.href = base() + "/api/download/" + f.id + "?pwd=" + encodeURIComponent(hostPassword);
-        a.download = f.name;
-        a.click();
+        "来自 " + (f.uploader || "未知") + " · " + fmtSize(f.size);
+
+      // 点击整行：打开文件
+      if (f.path) {
+        item.onclick = () => safe("open_path", { path: f.path });
+      }
+
+      // 右侧图标：打开所在位置
+      const reveal = document.createElement("button");
+      reveal.className = "icon-btn sm";
+      reveal.title = "打开所在位置";
+      reveal.setAttribute("aria-label", "打开所在位置");
+      reveal.innerHTML =
+        '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
+      reveal.onclick = (e) => {
+        e.stopPropagation();
+        if (f.path) safe("reveal_path", { path: f.path });
       };
-      item.querySelector(".acts").appendChild(dl);
+      item.querySelector(".acts").appendChild(reveal);
       box.appendChild(item);
     });
   }

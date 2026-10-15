@@ -368,17 +368,36 @@ fn now_secs() -> i64 {
 }
 
 fn file_list(st: &AppState) -> Vec<serde_json::Value> {
+    build_file_list(st, false)
+}
+
+/// 供主机（控制面板）使用，额外带上磁盘路径，便于「打开文件 / 打开所在位置」。
+/// 注意：不要把这个版本发给浏览器端设备，避免泄露服务端目录结构。
+fn file_list_with_path(st: &AppState) -> Vec<serde_json::Value> {
+    build_file_list(st, true)
+}
+
+fn build_file_list(st: &AppState, with_path: bool) -> Vec<serde_json::Value> {
     let files = st.inner.files.lock().unwrap();
     files
         .values()
         .map(|r| {
-            json!({
+            let mut v = json!({
                 "id": r.id,
                 "name": r.name,
                 "size": r.size,
                 "uploader": r.uploader,
                 "created": r.created
-            })
+            });
+            if with_path {
+                if let Some(obj) = v.as_object_mut() {
+                    obj.insert(
+                        "path".to_string(),
+                        serde_json::Value::String(r.path.to_string_lossy().to_string()),
+                    );
+                }
+            }
+            v
         })
         .collect()
 }
@@ -429,13 +448,21 @@ async fn qr(State(st): State<AppState>) -> impl IntoResponse {
 
 async fn list_files(
     State(st): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Query(q): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
     let pwd = q.get("pwd").cloned().unwrap_or_default();
     if !check_password(&st, &pwd) {
         return (StatusCode::FORBIDDEN, "forbidden").into_response();
     }
-    Json(json!({ "files": file_list(&st) })).into_response()
+    // 仅本机（控制面板）返回磁盘路径，供「打开文件 / 打开所在位置」使用；
+    // 其他设备不返回 path，避免泄露服务端目录结构。
+    let files = if addr.ip().is_loopback() {
+        file_list_with_path(&st)
+    } else {
+        file_list(&st)
+    };
+    Json(json!({ "files": files })).into_response()
 }
 
 async fn upload(
@@ -563,7 +590,7 @@ async fn handle_socket(
             let cfg = st.inner.cfg.lock().unwrap();
             let password = cfg.password.clone();
             let port = cfg.port;
-            let files = file_list(&st);
+            let files = file_list_with_path(&st);
             let devices = st.devices();
             let shared_text = current_shared_text(&st);
             (password, port, files, devices, shared_text)
@@ -731,7 +758,7 @@ fn broadcast_devices(st: &AppState) {
 }
 
 fn broadcast_files(st: &AppState) {
-    let files = file_list(st);
+    let files = file_list_with_path(st);
     notify_host(st, &json!({ "type": "file_list", "files": files }));
 }
 

@@ -196,6 +196,13 @@
           }
         }
 
+        function fmtSize(bytes) {
+          var b = bytes || 0;
+          if (b < 1024) return b + " B";
+          if (b < 1048576) return (b / 1024).toFixed(1) + " KB";
+          if (b < 1073741824) return (b / 1048576).toFixed(1) + " MB";
+          return (b / 1073741824).toFixed(2) + " GB";
+        }
         function refreshFiles() {
           if (!connected) return;
           fetch(base + "/api/files?pwd=" + encodeURIComponent(pwd))
@@ -210,10 +217,12 @@
                 item.className = "item";
                 item.innerHTML = '<div class="meta"><div class="name"></div><div class="sub"></div></div><div class="acts"></div>';
                 item.querySelector(".name").textContent = f.name;
-                item.querySelector(".sub").textContent = f.uploader + " · " + (f.size / 1024).toFixed(1) + " KB";
+                item.querySelector(".sub").textContent = f.uploader + " · " + fmtSize(f.size);
                 var dl = document.createElement("button");
-                dl.className = "ghost";
-                dl.textContent = "下载";
+                dl.className = "icon-btn";
+                dl.title = "下载";
+                dl.setAttribute("aria-label", "下载");
+                dl.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>';
                 dl.onclick = function () {
                   var a = document.createElement("a");
                   a.href = base + "/api/download/" + f.id + "?pwd=" + encodeURIComponent(pwd);

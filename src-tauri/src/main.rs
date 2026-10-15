@@ -63,7 +63,9 @@ fn main() {
             disconnect_device,
             regenerate_password,
             pick_dir,
-            open_dir
+            open_dir,
+            open_path,
+            reveal_path
         ])
         .run(tauri::generate_context!())
         .expect("error while running LanShare");
@@ -132,5 +134,41 @@ fn open_dir(path: String) {
     #[cfg(not(windows))]
     {
         let _ = std::process::Command::new("xdg-open").arg(&path).spawn();
+    }
+}
+
+/// 用系统默认程序打开一个文件
+#[tauri::command]
+fn open_path(path: String) {
+    #[cfg(windows)]
+    {
+        // explorer 会按扩展名调用默认关联程序打开文件
+        let _ = std::process::Command::new("explorer").arg(&path).spawn();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = std::process::Command::new("xdg-open").arg(&path).spawn();
+    }
+}
+
+/// 打开文件所在位置，并在资源管理器中选中该文件
+#[tauri::command]
+fn reveal_path(path: String) {
+    #[cfg(windows)]
+    {
+        // 必须用 /select,"<path>" 的原始形式：路径含空格时若不加引号，
+        // explorer 会把空格后的部分当成另一个参数，导致定位失败。
+        use std::os::windows::process::CommandExt;
+        let _ = std::process::Command::new("explorer")
+            .raw_arg(format!("/select,\"{}\"", path))
+            .spawn();
+    }
+    #[cfg(not(windows))]
+    {
+        let parent = std::path::Path::new(&path)
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or(path);
+        let _ = std::process::Command::new("xdg-open").arg(parent).spawn();
     }
 }
