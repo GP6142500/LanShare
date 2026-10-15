@@ -281,24 +281,45 @@
     } catch (e) {}
   }
 
-  // ----------------- 文本同步 -----------------
+  // ----------------- 文本同步（共享文本框） -----------------
+  // 所有端共用一个文本框：本端输入 → 广播；收到远端文本 → 覆盖本地。
+  // 用 applyingRemote 标记避免「收到后 set value 又触发 input 再广播」的回环。
   function send(obj) {
     if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
   }
-  $("text-send").onclick = () => {
-    const v = $("text-out").value;
-    if (v) send({ type: "text", value: v });
-  };
+  let applyingRemote = false;
+  let textTimer = null;
+  const sharedText = $("text-shared");
+
+  sharedText.addEventListener("input", () => {
+    if (applyingRemote) return;
+    $("text-hint").textContent = "编辑中…";
+    if (textTimer) clearTimeout(textTimer);
+    textTimer = setTimeout(() => {
+      send({ type: "text", value: sharedText.value });
+      $("text-hint").textContent = "已同步";
+    }, 120);
+  });
+
+  function applyRemoteText(value) {
+    if (sharedText.value === value) return; // 内容一致，避免光标跳动
+    applyingRemote = true;
+    sharedText.value = value;
+    applyingRemote = false;
+    $("text-hint").textContent = "已同步";
+  }
+
   $("text-copy").onclick = () => {
-    const v = $("text-in").value;
+    const v = sharedText.value;
     if (v) {
       if (navigator.clipboard) {
         navigator.clipboard.writeText(v).catch(fallbackCopy);
       } else fallbackCopy();
+      toast("已复制");
     }
   };
   function fallbackCopy() {
-    $("text-in").select();
+    sharedText.select();
     try {
       document.execCommand("copy");
     } catch (e) {}
@@ -409,6 +430,7 @@
             renderPwd();
             renderDevices(m.devices || []);
             renderFiles(m.files || []);
+            if (typeof m.text === "string") applyRemoteText(m.text);
           }
           break;
         case "device_list":
@@ -421,8 +443,7 @@
           toast(m.text);
           break;
         case "text":
-          $("text-in").value = m.value;
-          $("text-hint").textContent = "来自 " + (m.from || "设备");
+          applyRemoteText(m.value);
           break;
         case "password_updated":
           hostPassword = m.password || hostPassword;

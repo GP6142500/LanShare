@@ -125,15 +125,10 @@
 
         <div class="card">
           <h2>文本同步</h2>
-          <textarea id="out" placeholder="输入文本，点发送…"></textarea>
-          <div class="row" style="margin-top: 10px; justify-content: space-between">
-            <button id="send" class="primary">发送</button>
+          <div class="muted" style="margin-bottom: 6px">所有设备共用同一个文本框，任意一端修改实时同步</div>
+          <textarea id="shared" placeholder="在此输入，所有设备实时同步…"></textarea>
+          <div class="row" style="margin-top: 8px; justify-content: space-between">
             <span class="muted" id="hint"></span>
-          </div>
-          <hr class="sep" />
-          <div class="muted" style="margin-bottom: 6px">收到的文本</div>
-          <textarea id="in" readonly placeholder="收到的文本"></textarea>
-          <div class="row" style="margin-top: 8px; justify-content: flex-end">
             <button id="copy" class="ghost">复制</button>
           </div>
         </div>
@@ -253,7 +248,10 @@
             var m;
             try { m = JSON.parse(ev.data); } catch (e) { return; }
             if (m.type === "welcome") {
-              if (m.role === "device") setStatus(true, "连接中…");
+              if (m.role === "device") {
+                setStatus(true, "连接中…");
+                if (typeof m.text === "string") applyRemote(m.text);
+              }
             } else if (m.type === "paired") {
               if (m.ok) {
                 keepClosed = false;
@@ -267,8 +265,7 @@
               setConnected(false);
               showMsg("已被主机关断");
             } else if (m.type === "text") {
-              $("in").value = m.value;
-              $("hint").textContent = "来自 " + (m.from || "电脑");
+              applyRemote(m.value);
             }
           };
         }
@@ -336,19 +333,35 @@
           var inp = $("file");
           try { inp.value = ""; } catch (e) {}
         }
-        $("send").onclick = function () {
-          var v = $("out").value;
-          if (v) send({ type: "text", value: v });
-        };
+        // 共享文本框：输入即广播（防抖）；收到远端文本覆盖本地（防回环）
+        var applying = false, textTimer = null;
+        $("shared").addEventListener("input", function () {
+          if (applying) return;
+          $("hint").textContent = "编辑中…";
+          if (textTimer) clearTimeout(textTimer);
+          textTimer = setTimeout(function () {
+            send({ type: "text", value: $("shared").value });
+            $("hint").textContent = "已同步";
+          }, 120);
+        });
+        function applyRemote(value) {
+          var el = $("shared");
+          if (el.value === value) return;
+          applying = true;
+          el.value = value;
+          applying = false;
+          $("hint").textContent = "已同步";
+        }
+
         $("copy").onclick = function () {
-          var v = $("in").value;
+          var v = $("shared").value;
           if (v) {
             if (navigator.clipboard) navigator.clipboard.writeText(v).catch(fallbackCopy);
             else fallbackCopy();
           }
         };
         function fallbackCopy() {
-          $("in").select();
+          $("shared").select();
           try { document.execCommand("copy"); } catch (e) {}
         }
 

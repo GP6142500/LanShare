@@ -71,6 +71,7 @@ struct Inner {
     files: Mutex<HashMap<String, FileRecord>>,
     host: Mutex<Option<ClientSink>>, // 控制面板（主机）WebSocket
     devices: Mutex<HashMap<String, DeviceConn>>, // 已连接（已配对）设备
+    shared_text: Mutex<String>,                  // 共享文本框（所有端共用的唯一真相）
     runtime: Mutex<Option<ServerRuntime>>,
 }
 
@@ -84,6 +85,7 @@ impl AppState {
                 files: Mutex::new(HashMap::new()),
                 host: Mutex::new(None),
                 devices: Mutex::new(HashMap::new()),
+                shared_text: Mutex::new(String::new()),
                 runtime: Mutex::new(None),
             }),
         }
@@ -557,13 +559,14 @@ async fn handle_socket(
             return;
         }
         *st.inner.host.lock().unwrap() = Some(tx.clone());
-        let (password, port, files, devices) = {
+        let (password, port, files, devices, shared_text) = {
             let cfg = st.inner.cfg.lock().unwrap();
             let password = cfg.password.clone();
             let port = cfg.port;
             let files = file_list(&st);
             let devices = st.devices();
-            (password, port, files, devices)
+            let shared_text = current_shared_text(&st);
+            (password, port, files, devices, shared_text)
         };
         let _ = sender
             .send(
@@ -573,15 +576,21 @@ async fn handle_socket(
                     "password": password,
                     "port": port,
                     "files": files,
-                    "devices": devices
+                    "devices": devices,
+                    "text": shared_text
                 })
                 .to_string()
                 .into(),
             )
             .await;
     } else {
+        let shared_text = current_shared_text(&st);
         let _ = sender
-            .send(json!({ "type": "welcome", "role": "device" }).to_string().into())
+            .send(
+                json!({ "type": "welcome", "role": "device", "text": shared_text })
+                    .to_string()
+                    .into(),
+            )
             .await;
     }
 
@@ -662,6 +671,8 @@ async fn handle_ws_message(
             }
         }
         "text" => {
+            // 共享文本框：任意一端编辑即写入单一真相，并广播给「其他」所有端。
+            // 发送方本地已是最新，不回发，避免打断用户正在进行的输入。
             let allowed = role == "host" || device_id.is_some();
             if allowed {
                 if let Some(value) = v.get("value").and_then(|x| x.as_str()) {
@@ -683,20 +694,25 @@ async fn handle_ws_message(
     }
 }
 
+fn current_shared_text(st: &AppState) -> String {
+    st.inner.shared_text.lock().unwrap().clone()
+}
+
+/// 共享文本框：写入单一真相并广播给除发送方外的所有端。
+/// 发送方不回发（其本地已是最新），避免打断正在进行的输入。
 fn broadcast_text(st: &AppState, from_id: &str, value: &str) {
-    let (label, host_opt, devs) = {
+    // 先写入共享状态（用作用域确保锁尽快释放）
+    {
+        let mut cur = st.inner.shared_text.lock().unwrap();
+        *cur = value.to_string();
+    }
+
+    let (host_opt, devs) = {
         let host = st.inner.host.lock().unwrap().clone();
         let devs = st.inner.devices.lock().unwrap();
-        let label = if from_id == "host" {
-            "本机".to_string()
-        } else {
-            devs.get(from_id)
-                .map(|d| d.name.clone())
-                .unwrap_or_else(|| "设备".into())
-        };
-        (label, host, devs)
+        (host, devs)
     };
-    let msg = json!({ "type": "text", "value": value, "from": label }).to_string();
+    let msg = json!({ "type": "text", "value": value }).to_string();
     if from_id != "host" {
         if let Some(h) = host_opt {
             let _ = h.send(msg.clone());

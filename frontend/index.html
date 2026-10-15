@@ -109,39 +109,30 @@
           </div>
 
           <div class="tx-split">
-            <!-- 左：发送 -->
+            <!-- 左：文本同步 -->
             <div class="card">
-              <h3>发送</h3>
-
-              <div class="muted tx-label">文本</div>
-              <textarea id="text-out" placeholder="在此输入要同步的文本，点发送…"></textarea>
-              <div class="row" style="margin-top: 10px; justify-content: space-between">
-                <button class="primary" id="text-send">发送</button>
+              <h3>文本同步</h3>
+              <div class="muted tx-label">所有设备共用同一个文本框，任意一端修改实时同步</div>
+              <textarea id="text-shared" placeholder="在此输入，所有已连接设备实时同步…"></textarea>
+              <div class="row" style="margin-top: 8px; justify-content: space-between">
                 <span class="muted" id="text-hint"></span>
-              </div>
-
-              <hr class="sep" />
-
-              <div class="muted tx-label">文件（分享给设备下载）</div>
-              <div class="row">
-                <input id="share-file" type="file" multiple />
-                <button class="primary" id="share-btn">上传分享</button>
+                <button class="ghost" id="text-copy">复制</button>
               </div>
             </div>
 
-            <!-- 右：接收 -->
+            <!-- 右：文件共享 -->
             <div class="card">
-              <h3>接收</h3>
+              <h3>文件共享</h3>
 
-              <div class="muted tx-label">收到的文本</div>
-              <textarea id="text-in" readonly placeholder="等待接收…"></textarea>
-              <div class="row" style="margin-top: 8px; justify-content: flex-end">
-                <button class="ghost" id="text-copy">复制</button>
+              <div class="muted tx-label">发送文件（上传到本机，供设备下载）</div>
+              <div class="row">
+                <input id="share-file" type="file" multiple />
+                <button class="primary" id="share-btn">上传</button>
               </div>
 
               <hr class="sep" />
 
-              <div class="muted tx-label">收到的文件</div>
+              <div class="muted tx-label">共享的文件</div>
               <div id="file-list" class="list"></div>
             </div>
           </div>

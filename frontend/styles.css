@@ -549,9 +549,8 @@ textarea:focus {
   margin-bottom: 0;
 }
 
-.tx-split #text-out,
-.tx-split #text-in {
-  min-height: 88px;
+.tx-split #text-shared {
+  min-height: 150px;
 }
 
 @media (max-width: 680px) {
