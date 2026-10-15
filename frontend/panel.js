@@ -331,30 +331,37 @@
     if (textTimer) clearTimeout(textTimer);
     sharedText.value = "";
     send({ type: "text", value: "" });
-    $("text-hint").textContent = "已清空";
+    $("text-hint").textContent = "已同步";
     sharedText.focus();
   };
 
   // ----------------- 分享文件 -----------------
-  $("share-btn").onclick = async () => {
+  // 点击图标 → 打开系统文件选择器；选中后立即上传，无需二次点击
+  $("share-pick").onclick = () => $("share-file").click();
+  $("share-file").onchange = () => uploadFiles();
+
+  async function uploadFiles() {
     const input = $("share-file");
-    const files = input.files;
-    if (!files.length) {
-      toast("请先选择文件");
-      return;
-    }
+    const files = Array.from(input.files || []);
+    if (!files.length) return;
+    const status = $("share-status");
+    const pick = $("share-pick");
     // 确保密码已就绪（服务刚启动时 welcome 可能未到）
     if (!hostPassword) {
       const c = await safe("get_config");
       if (c) hostPassword = c.password || "";
     }
     if (!hostPassword) {
-      toast("连接密码未就绪，请稍后重试");
+      status.textContent = "连接密码未就绪，请稍后重试";
+      input.value = "";
       return;
     }
+    pick.disabled = true;
     let ok = 0,
       fail = 0;
-    for (const f of files) {
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      status.textContent = "上传中（" + (i + 1) + "/" + files.length + "）：" + f.name;
       const fd = new FormData();
       fd.append("file", f);
       try {
@@ -373,11 +380,12 @@
       }
     }
     input.value = "";
-    if (ok && !fail) toast("已上传 " + ok + " 个文件");
-    else if (ok && fail) toast("已上传 " + ok + " 个，失败 " + fail + " 个");
-    else toast("上传失败，请确认服务已启动");
+    pick.disabled = false;
+    if (ok && !fail) status.textContent = "已上传 " + ok + " 个文件";
+    else if (ok && fail) status.textContent = "已上传 " + ok + " 个，失败 " + fail + " 个";
+    else status.textContent = "上传失败，请确认服务已启动";
     refreshFiles();
-  };
+  }
 
   // ----------------- 设置 -----------------
   $("storage-pick").onclick = async () => {

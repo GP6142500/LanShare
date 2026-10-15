@@ -113,9 +113,12 @@
 
         <div class="card">
           <h2>发送文件到电脑</h2>
-          <div class="row">
-            <input id="file" type="file" multiple />
-            <button id="upload" class="primary">上传</button>
+          <div class="row between" style="align-items: center">
+            <div class="muted">选择文件后自动上传</div>
+            <button id="upload" class="icon-btn" title="选择文件并上传" aria-label="选择文件并上传">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M12 3v13"/><path d="m7 8 5-5 5 5"/></svg>
+            </button>
+            <input id="file" type="file" multiple hidden />
           </div>
           <div id="up-msg" class="muted" style="margin-top: 8px"></div>
         </div>
@@ -290,17 +293,19 @@
           connected = false;
           setConnected(false);
         };
-        // 选中文件后立即缓存（移动端异步后 input.files 可能失效）
+        // 图标按钮触发系统文件选择器；选中后立即上传（移动端异步后 input.files 可能失效，故先缓存）
         var pickedFiles = [];
         function upMsg(t) { var el = $("up-msg"); if (el) el.textContent = t || ""; }
+        $("upload").onclick = function () { $("file").click(); };
         $("file").onchange = function () {
           pickedFiles = [];
           var f = $("file").files;
           for (var i = 0; i < f.length; i++) pickedFiles.push(f[i]);
-          upMsg(pickedFiles.length ? ("已选择 " + pickedFiles.length + " 个文件") : "");
+          if (pickedFiles.length) doUpload();
+          else upMsg("");
         };
 
-        $("upload").onclick = function () {
+        function doUpload() {
           var files = pickedFiles.length ? pickedFiles : (function () {
             // 兜底：若 change 未触发，尝试读取 input.files
             var arr = [], f = $("file").files;
@@ -310,10 +315,12 @@
           if (!files.length) { upMsg("请先选择要上传的文件"); return; }
           if (!pwd) { upMsg("未获取到连接密码，请重新连接"); return; }
           if (!connected) { upMsg("未连接，请先连接"); return; }
+          $("upload").disabled = true;
           var total = files.length, done = 0, fail = 0, firstErr = "";
           upMsg("上传中… 0/" + total);
           var finish = function () {
             if (done + fail < total) return;
+            $("upload").disabled = false;
             pickClear();
             if (done && !fail) upMsg("已上传 " + done + " 个文件");
             else if (done && fail) upMsg("上传 " + done + " 个，失败 " + fail + " 个" + (firstErr ? "（" + firstErr + "）" : ""));
@@ -336,7 +343,7 @@
                 finish();
               });
           });
-        };
+        }
         function pickClear() {
           pickedFiles = [];
           var inp = $("file");
@@ -369,7 +376,7 @@
           if (textTimer) clearTimeout(textTimer);
           el.value = "";
           send({ type: "text", value: "" });
-          $("hint").textContent = "已清空";
+          $("hint").textContent = "已同步";
         };
 
         $("copy").onclick = function () {

@@ -131,11 +131,14 @@
             <div class="card">
               <h3>文件共享</h3>
 
-              <div class="muted tx-label">发送文件（上传到本机，供设备下载）</div>
-              <div class="row">
-                <input id="share-file" type="file" multiple />
-                <button class="primary" id="share-btn">上传</button>
+              <div class="row between" style="align-items: center">
+                <div class="muted tx-label" style="margin: 0">发送文件（上传到本机，供设备下载）</div>
+                <button class="icon-btn" id="share-pick" title="选择文件并上传" aria-label="选择文件并上传">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M12 3v13"/><path d="m7 8 5-5 5 5"/></svg>
+                </button>
+                <input id="share-file" type="file" multiple hidden />
               </div>
+              <div class="muted" id="share-status" style="margin-top: 6px"></div>
 
               <hr class="sep" />
 
