@@ -483,6 +483,17 @@ textarea:focus {
   font-size: 14px;
   font-weight: 500;
   line-height: 1.4;
+  cursor: pointer;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+
+.dev-chip:hover {
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+
+.dev-chip:active {
+  transform: translateY(0);
 }
 
 .dev-chip .dev-chip-dot {

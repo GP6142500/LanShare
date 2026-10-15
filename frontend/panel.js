@@ -29,14 +29,17 @@
   }
 
   // ----------------- 导航切换 -----------------
+  function switchView(name) {
+    document.querySelectorAll(".nav-item").forEach((b) => {
+      b.classList.toggle("active", b.dataset.view === name);
+    });
+    document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
+    const target = $("view-" + name);
+    if (target) target.classList.add("active");
+  }
   function initNav() {
     document.querySelectorAll(".nav-item").forEach((btn) => {
-      btn.onclick = () => {
-        document.querySelectorAll(".nav-item").forEach((b) => b.classList.remove("active"));
-        document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
-        btn.classList.add("active");
-        $("view-" + btn.dataset.view).classList.add("active");
-      };
+      btn.onclick = () => switchView(btn.dataset.view);
     });
   }
 
@@ -199,7 +202,8 @@
     list.forEach((d) => {
       const chip = document.createElement("div");
       chip.className = "dev-chip";
-      chip.title = d.name + "（连接于 " + fmtTime(d.connected_at) + "）";
+      chip.title = d.name + "（连接于 " + fmtTime(d.connected_at) + "）点击前往传输页";
+      chip.onclick = () => switchView("devices");
       const dot = document.createElement("span");
       dot.className = "dev-chip-dot";
       const name = document.createElement("span");
