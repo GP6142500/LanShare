@@ -194,35 +194,67 @@
   }
 
   // ----------------- 接收历史 -----------------
-  function renderFiles(files) {
-    const box = $("file-list");
+  function renderHistory(items) {
+    const box = $("history-list");
+    if (!box) return;
     box.innerHTML = "";
-    const fs = (files || []).slice().reverse();
-    if (!fs.length) {
-      box.innerHTML = '<div class="empty">暂无文件</div>';
+    const list = (items || []).slice().reverse();
+    if (!list.length) {
+      box.innerHTML = '<div class="empty">暂无接收记录</div>';
       return;
     }
-    fs.forEach((f) => {
+    list.forEach((h) => {
       const item = document.createElement("div");
       item.className = "item";
       item.innerHTML =
         '<div class="meta"><div class="name"></div><div class="sub"></div></div>' +
         '<div class="acts"></div>';
-      item.querySelector(".name").textContent = f.name;
+      item.querySelector(".name").textContent = h.name || (h.kind === "text" ? "文本" : "文件");
+      const sizeTxt =
+        h.kind === "file" && h.size ? " · " + (h.size / 1024).toFixed(1) + " KB" : "";
       item.querySelector(".sub").textContent =
-        f.uploader + " · " + (f.size / 1024).toFixed(1) + " KB";
-      const dl = document.createElement("button");
-      dl.className = "ghost";
-      dl.textContent = "下载";
-      dl.onclick = () => {
-        const a = document.createElement("a");
-        a.href = base() + "/api/download/" + f.id + "?pwd=" + encodeURIComponent(hostPassword);
-        a.download = f.name;
-        a.click();
-      };
-      item.querySelector(".acts").appendChild(dl);
+        (h.kind === "file" ? "文件" : "文本") +
+        " · 来自 " +
+        (h.source || "未知") +
+        sizeTxt +
+        " · " +
+        fmtTime(h.created);
+      const acts = item.querySelector(".acts");
+      if (h.kind === "file") {
+        const dl = document.createElement("button");
+        dl.className = "ghost";
+        dl.textContent = "下载";
+        dl.onclick = () => {
+          const a = document.createElement("a");
+          a.href = base() + "/api/download/" + h.id + "?pwd=" + encodeURIComponent(hostPassword);
+          a.download = h.name;
+          a.click();
+        };
+        acts.appendChild(dl);
+      } else {
+        const cp = document.createElement("button");
+        cp.className = "ghost";
+        cp.textContent = "复制";
+        cp.onclick = () => {
+          const v = h.value || "";
+          if (navigator.clipboard) navigator.clipboard.writeText(v).catch(fallbackCopyText(v));
+          else fallbackCopyText(v);
+        };
+        acts.appendChild(cp);
+      }
       box.appendChild(item);
     });
+  }
+
+  function fallbackCopyText(text) {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      document.execCommand("copy");
+    } catch (e) {}
+    document.body.removeChild(ta);
   }
 
   // ----------------- 文本同步 -----------------
@@ -327,7 +359,7 @@
             serverPort = m.port || serverPort;
             renderPwd();
             renderDevices(m.devices || []);
-            renderFiles(m.files || []);
+            renderHistory(m.history || []);
           }
           break;
         case "device_list":
@@ -336,8 +368,8 @@
         case "toast":
           toast(m.text);
           break;
-        case "file_list":
-          renderFiles(m.files || []);
+        case "history":
+          renderHistory(m.items || []);
           break;
         case "text":
           $("text-in").value = m.value;
