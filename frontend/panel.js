@@ -343,7 +343,7 @@
     // 后端已按时间倒序返回；这里不再反向，保证「最新在最上」
     const fs = files || [];
     if (!fs.length) {
-      box.innerHTML = '<div class="empty">本次启动后还没有上传文件</div>';
+      box.innerHTML = '<div class="empty">当前会话暂无文件</div>';
       return;
     }
     fs.forEach((f) => box.appendChild(buildFileRow(f, { showUploader: false })));

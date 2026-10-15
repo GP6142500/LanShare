@@ -721,19 +721,12 @@ input[type="number"]:focus {
   color: #fff;
 }
 
-/* 列表小标题：区分「本次上传」与历史 */
+/* 列表小标题：区分「当前会话文件列表」与历史 */
 .list-label {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
   font-size: 12px;
   font-weight: 600;
   color: var(--text);
   margin-bottom: 8px;
-}
-.list-label .muted {
-  font-weight: 400;
 }
 
 /* 历史条目：设备名用小徽标区分 */
