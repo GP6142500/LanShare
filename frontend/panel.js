@@ -268,69 +268,85 @@
   }
 
   // ----------------- 接收的文件（主机面板） -----------------
-  // 主机：点击文件行=用默认程序打开；右侧图标=打开文件所在位置
+  // 主机：点击文件行=用默认程序打开；右侧图标=打开文件所在位置 / 删除
+  // 传输页与历史页共用同一套渲染，只在「是否显示设备徽标」上略有差异
+  function buildFileRow(f, opts) {
+    const showUploader = !(opts && opts.showUploader === false);
+    const item = document.createElement("div");
+    item.className = "item clickable";
+    item.title = f.path ? "点击打开：" + f.path : "";
+    item.innerHTML =
+      '<div class="meta"><div class="name"></div><div class="sub"></div></div>' +
+      '<div class="acts"></div>';
+    item.querySelector(".name").textContent = f.name;
+
+    const sub = item.querySelector(".sub");
+    const uploader = f.uploader || "未知";
+    if (showUploader) {
+      const badge = document.createElement("span");
+      badge.className = "up-badge";
+      badge.textContent = uploader;
+      sub.appendChild(badge);
+    }
+    const info = document.createElement("span");
+    const when = fmtTime(f.mtime || f.created);
+    info.textContent = fmtSize(f.size) + (when ? " · " + when : "");
+    sub.appendChild(info);
+
+    // 点击整行：打开文件
+    if (f.path) {
+      item.onclick = () => safe("open_path", { path: f.path });
+    }
+
+    // 图标：打开所在位置
+    const reveal = document.createElement("button");
+    reveal.className = "icon-btn sm";
+    reveal.title = "打开所在位置";
+    reveal.setAttribute("aria-label", "打开所在位置");
+    reveal.innerHTML =
+      '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
+    reveal.onclick = (e) => {
+      e.stopPropagation();
+      if (f.path) safe("reveal_path", { path: f.path });
+    };
+    item.querySelector(".acts").appendChild(reveal);
+
+    // 图标：删除该文件
+    const del = document.createElement("button");
+    del.className = "icon-btn sm danger";
+    del.title = "删除文件";
+    del.setAttribute("aria-label", "删除文件");
+    del.innerHTML =
+      '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M19 6l-1 14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>';
+    del.onclick = async (e) => {
+      e.stopPropagation();
+      if (!window.confirm('删除文件「' + f.name + '」？此操作不可恢复。')) return;
+      del.disabled = true;
+      const ok = await safe("delete_received_file", { id: f.id });
+      if (ok === false) {
+        del.disabled = false;
+        toast("删除失败，文件可能已被移除");
+        refreshFiles();
+      } else {
+        toast("已删除");
+        refreshFiles();
+      }
+    };
+    item.querySelector(".acts").appendChild(del);
+    return item;
+  }
+
   function renderFiles(files) {
     const box = $("file-list");
     if (!box) return;
     box.innerHTML = "";
-    const fs = (files || []).slice().reverse();
+    // 后端已按时间倒序返回；这里不再反向，保证「最新在最上」
+    const fs = files || [];
     if (!fs.length) {
       box.innerHTML = '<div class="empty">暂无文件</div>';
       return;
     }
-    fs.forEach((f) => {
-      const item = document.createElement("div");
-      item.className = "item clickable";
-      item.title = f.path ? "点击打开：" + f.path : "";
-      item.innerHTML =
-        '<div class="meta"><div class="name"></div><div class="sub"></div></div>' +
-        '<div class="acts"></div>';
-      item.querySelector(".name").textContent = f.name;
-      item.querySelector(".sub").textContent =
-        "来自 " + (f.uploader || "未知") + " · " + fmtSize(f.size);
-
-      // 点击整行：打开文件
-      if (f.path) {
-        item.onclick = () => safe("open_path", { path: f.path });
-      }
-
-      // 右侧图标：打开所在位置
-      const reveal = document.createElement("button");
-      reveal.className = "icon-btn sm";
-      reveal.title = "打开所在位置";
-      reveal.setAttribute("aria-label", "打开所在位置");
-      reveal.innerHTML =
-        '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
-      reveal.onclick = (e) => {
-        e.stopPropagation();
-        if (f.path) safe("reveal_path", { path: f.path });
-      };
-      item.querySelector(".acts").appendChild(reveal);
-
-      // 右侧图标：删除该文件（仅主机可见）
-      const del = document.createElement("button");
-      del.className = "icon-btn sm danger";
-      del.title = "删除文件";
-      del.setAttribute("aria-label", "删除文件");
-      del.innerHTML =
-        '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M19 6l-1 14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>';
-      del.onclick = async (e) => {
-        e.stopPropagation();
-        if (!window.confirm('删除文件「' + f.name + '」？此操作不可恢复。')) return;
-        del.disabled = true;
-        const ok = await safe("delete_received_file", { id: f.id });
-        if (ok === false) {
-          del.disabled = false;
-          toast("删除失败，文件可能已被移除");
-          refreshFiles();
-        } else {
-          toast("已删除");
-          refreshFiles();
-        }
-      };
-      item.querySelector(".acts").appendChild(del);
-      box.appendChild(item);
-    });
+    fs.forEach((f) => box.appendChild(buildFileRow(f, { showUploader: false })));
   }
   async function refreshFiles() {
     if (!hostPassword) {
@@ -342,9 +358,86 @@
       const r = await fetch(base() + "/api/files?pwd=" + encodeURIComponent(hostPassword));
       if (r.ok) {
         const d = await r.json();
-        renderFiles(d.files || []);
+        allFiles = d.files || [];
+        renderFiles(allFiles);
+        renderHistory();
       }
     } catch (e) {}
+  }
+
+  // ----------------- 历史页 -----------------
+  // 与传输页共用 allFiles；本页额外支持搜索（文件名 + 设备名）与清空全部
+  let allFiles = [];
+  let histQuery = "";
+
+  function renderHistory() {
+    const box = $("history-list");
+    if (!box) return;
+    const q = histQuery.trim().toLowerCase();
+    const fs = allFiles.filter((f) => {
+      if (!q) return true;
+      const name = (f.name || "").toLowerCase();
+      const up = (f.uploader || "").toLowerCase();
+      return name.includes(q) || up.includes(q);
+    });
+
+    box.innerHTML = "";
+    if (!fs.length) {
+      box.innerHTML =
+        '<div class="empty">' +
+        (allFiles.length ? "没有匹配的文件" : "接收目录中暂无文件") +
+        "</div>";
+    } else {
+      fs.forEach((f) => box.appendChild(buildFileRow(f, { showUploader: true })));
+    }
+
+    // 汇总：文件数 + 总大小（按全部，不受搜索影响）
+    const total = allFiles.reduce((s, f) => s + (f.size || 0), 0);
+    const sum = $("hist-summary");
+    if (sum) {
+      let text = "共 " + allFiles.length + " 个文件 · " + fmtSize(total);
+      if (q) text += "（筛选出 " + fs.length + " 个）";
+      sum.textContent = text;
+    }
+  }
+
+  const histSearch = $("hist-search");
+  if (histSearch) {
+    histSearch.addEventListener("input", () => {
+      histQuery = histSearch.value || "";
+      renderHistory();
+    });
+  }
+
+  const histOpenDir = $("hist-open-dir");
+  if (histOpenDir) {
+    histOpenDir.onclick = () => safe("open_storage_dir");
+  }
+
+  const histClear = $("hist-clear");
+  if (histClear) {
+    histClear.onclick = async () => {
+      if (!allFiles.length) {
+        toast("没有可清空的文件");
+        return;
+      }
+      if (
+        !window.confirm(
+          "确定清空接收目录中的全部 " + allFiles.length + " 个文件？此操作不可恢复。"
+        )
+      )
+        return;
+      histClear.disabled = true;
+      const r = await safe("clear_history_files");
+      histClear.disabled = false;
+      if (Array.isArray(r)) {
+        const [ok, fail] = r;
+        toast(fail ? "已删除 " + ok + " 个，失败 " + fail + " 个" : "已清空 " + ok + " 个文件");
+      } else {
+        toast("已清空");
+      }
+      refreshFiles();
+    };
   }
 
   // ----------------- 文本同步（共享文本框） -----------------
@@ -554,7 +647,9 @@
             serverPort = m.port || serverPort;
             renderPwd();
             renderDevices(m.devices || []);
-            renderFiles(m.files || []);
+            allFiles = m.files || [];
+            renderFiles(allFiles);
+            renderHistory();
             if (typeof m.text === "string") applyRemoteText(m.text);
           }
           break;
@@ -562,7 +657,9 @@
           renderDevices(m.devices || []);
           break;
         case "file_list":
-          renderFiles(m.files || []);
+          allFiles = m.files || [];
+          renderFiles(allFiles);
+          renderHistory();
           break;
         case "toast":
           toast(m.text);

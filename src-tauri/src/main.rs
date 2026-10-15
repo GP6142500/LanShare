@@ -27,6 +27,8 @@ fn main() {
                         freed / 1024 / 1024
                     );
                 }
+                // 扫描接收目录，恢复历史文件列表（重启后仍可管理历史）
+                boot.restore_on_start();
                 let _ = boot.start().await;
             });
 
@@ -75,7 +77,9 @@ fn main() {
             open_dir,
             open_path,
             reveal_path,
-            delete_received_file
+            open_storage_dir,
+            delete_received_file,
+            clear_history_files
         ])
         .run(tauri::generate_context!())
         .expect("error while running LanShare");
@@ -192,4 +196,24 @@ fn reveal_path(path: String) {
 #[tauri::command]
 fn delete_received_file(state: State<'_, AppState>, id: String) -> bool {
     state.delete_file(&id)
+}
+
+/// 清空接收目录里的所有历史文件。返回（成功数, 失败数）。
+#[tauri::command]
+fn clear_history_files(state: State<'_, AppState>) -> (usize, usize) {
+    state.clear_all_files()
+}
+
+/// 打开当前接收目录
+#[tauri::command]
+fn open_storage_dir(state: State<'_, AppState>) {
+    let dir = state.config().storage_dir;
+    #[cfg(windows)]
+    {
+        let _ = std::process::Command::new("explorer").arg(&dir).spawn();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = std::process::Command::new("xdg-open").arg(&dir).spawn();
+    }
 }

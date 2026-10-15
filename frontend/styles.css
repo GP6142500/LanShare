@@ -685,3 +685,50 @@ input[type="number"]:focus {
   border-color: #ef4444;
   color: #fff;
 }
+
+/* ----------------- 历史页 ----------------- */
+.hist-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.search-box {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+.search-box .search-icon {
+  position: absolute;
+  left: 11px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--muted);
+  pointer-events: none;
+}
+.search-box input {
+  padding-left: 33px;
+}
+
+/* 行内图标在历史页也用红色 hover（删除） */
+.icon-btn.danger:hover {
+  border-color: #ef4444;
+  color: #ef4444;
+}
+.icon-btn.danger:not(.sm):hover {
+  background: #ef4444;
+  border-color: #ef4444;
+  color: #fff;
+}
+
+/* 历史条目：设备名用小徽标区分 */
+.item .up-badge {
+  display: inline-block;
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  margin-right: 6px;
+  vertical-align: 1px;
+}

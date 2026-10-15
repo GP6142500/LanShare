@@ -137,9 +137,42 @@ impl AppState {
         true
     }
 
+    /// 清空接收目录中的所有历史文件。返回（成功数, 失败数）。
+    pub fn clear_all_files(&self) -> (usize, usize) {
+        let base = self.inner.cfg.lock().unwrap().storage_dir.clone();
+        let records: Vec<FileRecord> = {
+            let files = self.inner.files.lock().unwrap();
+            files.values().cloned().collect()
+        };
+        let mut ok = 0usize;
+        let mut fail = 0usize;
+        for r in &records {
+            if std::fs::remove_file(&r.path).is_ok() {
+                ok += 1;
+            } else {
+                fail += 1;
+            }
+        }
+        // 无论删除是否成功，都按磁盘实际状态重建（失败的会重新被扫回来）
+        {
+            let mut files = self.inner.files.lock().unwrap();
+            files.clear();
+        }
+        restore_files_from_disk(self);
+        // 清理空的上传者子目录
+        prune_empty_dirs(&base);
+        broadcast_files(self);
+        (ok, fail)
+    }
+
     /// 启动时执行一次自动清理（超阈值时删除最旧且超龄的文件）。
     pub fn cleanup_on_start(&self) -> (usize, u64) {
         run_auto_cleanup(self)
+    }
+
+    /// 启动时从磁盘恢复历史文件列表（重启后仍能看到历史）。
+    pub fn restore_on_start(&self) {
+        restore_files_from_disk(self);
     }
 
     pub fn new_password(&self) -> String {
@@ -169,6 +202,7 @@ impl AppState {
                 .route("/api/config", get(api_config))
                 .route("/api/qr", get(qr))
                 .route("/api/files", get(list_files))
+                .route("/api/files/clear", post(clear_files_handler))
                 .route("/api/file/:id", axum::routing::delete(delete_file_handler))
                 .route("/api/upload", post(upload))
                 .route("/api/download/:id", get(download))
@@ -229,10 +263,11 @@ impl AppState {
         if cleanup_days == 0 {
             return Err("保留天数需大于 0".into());
         }
-        let (old_port, old_pwd) = {
+        let (old_port, old_pwd, old_dir, new_dir) = {
             let mut cfg = self.inner.cfg.lock().unwrap();
             let old_port = cfg.port;
             let old_pwd = cfg.password.clone();
+            let old_dir = cfg.storage_dir.clone();
             cfg.port = port;
             cfg.password = password.clone();
             cfg.auto_cleanup = auto_cleanup;
@@ -246,9 +281,33 @@ impl AppState {
                 }
                 cfg.storage_dir = p;
             }
+            let new_dir = cfg.storage_dir.clone();
             save_config(&cfg);
-            (old_port, old_pwd)
+            (old_port, old_pwd, old_dir, new_dir)
         };
+
+        // 接收目录变更：把已有文件迁移到新目录（移动而非丢弃）
+        if old_dir != new_dir {
+            let (moved, failed) = move_storage_dir(&old_dir, &new_dir);
+            // 内存元数据里的路径同步更新（重新扫描新目录是最稳妥的做法）
+            {
+                let mut files = self.inner.files.lock().unwrap();
+                files.clear();
+            }
+            restore_files_from_disk(self);
+            broadcast_files(self);
+            if moved > 0 || failed > 0 {
+                notify_host(
+                    self,
+                    &json!({
+                        "type": "toast",
+                        "text": format!("已迁移 {} 个文件{}", moved,
+                            if failed > 0 { format!("，{} 个失败", failed) } else { String::new() })
+                    }),
+                );
+            }
+        }
+
         if password != old_pwd {
             notify_host(self, &json!({ "type": "password_updated", "password": password }));
         }
@@ -482,6 +541,133 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    // ---------------- 磁盘扫描：还原文件名与上传者 ----------------
+
+    #[test]
+    fn parse_stored_name_recovers_id_and_real_name() {
+        let (id, name) = parse_stored_name("a1b2c3d4__报告 v2.docx");
+        assert_eq!(id, "a1b2c3d4");
+        assert_eq!(name, "报告 v2.docx");
+        // 不符合规则（前缀非 8 位十六进制）时整体当文件名
+        let (id2, name2) = parse_stored_name("明文文件.txt");
+        assert_eq!(id2, "");
+        assert_eq!(name2, "明文文件.txt");
+        // 前缀长度对但不是十六进制 → 不解析
+        let (id3, _) = parse_stored_name("zzzzzzzz__x.txt");
+        assert_eq!(id3, "");
+    }
+
+    #[test]
+    fn scan_storage_dir_recovers_uploader_and_sorts_newest_first() {
+        let root = tmp_dir("scan");
+        std::fs::create_dir_all(root.join("iPhone")).unwrap();
+        std::fs::create_dir_all(root.join("Android")).unwrap();
+        // 规范落盘名
+        std::fs::write(root.join("iPhone/a1b2c3d4__照片.jpg"), vec![0u8; 100]).unwrap();
+        std::fs::write(root.join("Android/deadbeef__note.txt"), vec![0u8; 50]).unwrap();
+        // 用户自己丢进根目录的文件（无上传者子目录）
+        std::fs::write(root.join("手动放入.txt"), vec![0u8; 10]).unwrap();
+
+        let list = scan_storage_dir(&root);
+        assert_eq!(list.len(), 3, "应扫描到 3 个文件");
+
+        let photo = list.iter().find(|r| r.name == "照片.jpg").expect("应还原出原始文件名");
+        assert_eq!(photo.uploader, "iPhone", "上传者应来自子目录名");
+        assert_eq!(photo.id, "a1b2c3d4", "id 应来自落盘名前缀");
+
+        let note = list.iter().find(|r| r.name == "note.txt").unwrap();
+        assert_eq!(note.uploader, "Android");
+
+        let manual = list.iter().find(|r| r.name == "手动放入.txt").unwrap();
+        assert_eq!(manual.uploader, "未知", "根目录文件应归为未知来源");
+
+        // 排序：最新在最前（mtime 单调不增）
+        for w in list.windows(2) {
+            assert!(w[0].mtime >= w[1].mtime, "应按 mtime 倒序排列");
+        }
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // ---------------- 接收目录迁移 ----------------
+
+    #[test]
+    fn move_storage_dir_keeps_uploader_structure() {
+        let src = tmp_dir("move_src");
+        let dst = std::env::temp_dir().join(format!("lanshare_test_move_dst_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dst);
+
+        std::fs::create_dir_all(src.join("iPhone")).unwrap();
+        std::fs::create_dir_all(src.join("PC/nested")).unwrap();
+        std::fs::write(src.join("iPhone/a1b2c3d4__a.txt"), b"aaa").unwrap();
+        std::fs::write(src.join("PC/nested/b.txt"), b"bbb").unwrap();
+
+        let (moved, failed) = move_storage_dir(&src, &dst);
+        assert_eq!(moved, 2, "应移动 2 个文件");
+        assert_eq!(failed, 0);
+
+        // 结构与内容都保留
+        assert!(dst.join("iPhone/a1b2c3d4__a.txt").is_file(), "子目录结构应保留");
+        assert!(dst.join("PC/nested/b.txt").is_file(), "嵌套目录结构应保留");
+        assert_eq!(std::fs::read(dst.join("iPhone/a1b2c3d4__a.txt")).unwrap(), b"aaa");
+        // 源目录中的文件已移走
+        assert!(!src.join("iPhone/a1b2c3d4__a.txt").exists(), "源文件应已被移走");
+
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&dst);
+    }
+
+    #[test]
+    fn move_storage_dir_does_not_overwrite_existing() {
+        let src = tmp_dir("move_conflict_src");
+        let dst = std::env::temp_dir().join(format!("lanshare_test_move_dst2_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dst);
+
+        std::fs::create_dir_all(src.join("iPhone")).unwrap();
+        std::fs::create_dir_all(dst.join("iPhone")).unwrap();
+        std::fs::write(src.join("iPhone/a1b2c3d4__same.txt"), b"new").unwrap();
+        std::fs::write(dst.join("iPhone/a1b2c3d4__same.txt"), b"old").unwrap();
+
+        let (moved, _failed) = move_storage_dir(&src, &dst);
+        assert_eq!(moved, 1);
+        // 原有文件内容不被覆盖
+        assert_eq!(
+            std::fs::read(dst.join("iPhone/a1b2c3d4__same.txt")).unwrap(),
+            b"old",
+            "同名文件不应被覆盖"
+        );
+        assert!(dst.join("iPhone/a1b2c3d4__same-1.txt").is_file(), "冲突时应加 -1 后缀");
+
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&dst);
+    }
+
+    #[test]
+    fn move_storage_dir_noop_when_same_path() {
+        let d = tmp_dir("move_same");
+        std::fs::write(d.join("x.txt"), b"1").unwrap();
+        let (moved, failed) = move_storage_dir(&d, &d);
+        assert_eq!((moved, failed), (0, 0));
+        assert!(d.join("x.txt").is_file(), "同路径时不应动文件");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn prune_empty_dirs_removes_empties_but_keeps_files() {
+        let root = tmp_dir("prune");
+        std::fs::create_dir_all(root.join("empty1/empty2")).unwrap();
+        std::fs::create_dir_all(root.join("hasfile")).unwrap();
+        std::fs::write(root.join("hasfile/keep.txt"), b"1").unwrap();
+
+        prune_empty_dirs(&root);
+
+        assert!(!root.join("empty1").exists(), "空目录应被清理");
+        assert!(root.join("hasfile/keep.txt").is_file(), "有文件的目录应保留");
+        assert!(root.exists(), "根目录本身应保留");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
 
 fn gen_password() -> String {
@@ -584,6 +770,180 @@ fn file_mtime_secs(path: &std::path::Path) -> i64 {
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+// ----------------------------- 磁盘扫描（历史文件） -----------------------------
+
+/// 上传时落盘的文件名形如 `<8位id>__<原始文件名>`，且位于「接收目录/<上传者>/」下。
+/// 因此可以直接从磁盘路径还原出「设备名」和「原始文件名」，无需持久化元数据。
+const ID_PREFIX_LEN: usize = 8;
+const ID_NAME_SEP: &str = "__";
+
+/// 从落盘路径解析出 (id, 原始文件名)。不符合命名规则时用文件名兜底。
+fn parse_stored_name(file_name: &str) -> (String, String) {
+    if let Some(pos) = file_name.find(ID_NAME_SEP) {
+        let id = &file_name[..pos];
+        if id.len() == ID_PREFIX_LEN && id.chars().all(|c| c.is_ascii_hexdigit()) {
+            return (id.to_string(), file_name[pos + ID_NAME_SEP.len()..].to_string());
+        }
+    }
+    (String::new(), file_name.to_string())
+}
+
+/// 扫描接收目录，重建历史文件列表（按上传者子目录 → 文件）。
+/// 每条记录用「完整路径」作为稳定 id（重启后依然可定位同一文件）。
+fn scan_storage_dir(base: &std::path::Path) -> Vec<FileRecord> {
+    let mut out = Vec::new();
+    scan_into(base, base, &mut out);
+    // 按时间倒序：最新在最前
+    out.sort_by(|a, b| b.mtime.cmp(&a.mtime));
+    out
+}
+
+fn scan_into(base: &std::path::Path, dir: &std::path::Path, out: &mut Vec<FileRecord>) {
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    for e in rd.flatten() {
+        let Ok(ft) = e.file_type() else { continue };
+        let path = e.path();
+        if ft.is_dir() {
+            scan_into(base, &path, out);
+            continue;
+        }
+        if !ft.is_file() {
+            continue;
+        }
+        let Ok(md) = e.metadata() else { continue };
+        // 上传者 = 相对于接收目录的第一级子目录名；直接放在根目录下的文件归为「未知」
+        let uploader = path
+            .strip_prefix(base)
+            .ok()
+            .and_then(|rel| rel.components().next())
+            .map(|c| c.as_os_str().to_string_lossy().to_string())
+            .filter(|s| rel_component_is_dir(base, s))
+            .unwrap_or_else(|| "未知".to_string());
+        let file_name = e.file_name().to_string_lossy().to_string();
+        let (id_prefix, real_name) = parse_stored_name(&file_name);
+        let key = if id_prefix.is_empty() {
+            // 非本程序写入的文件（用户自己放进去的）：用完整路径作为 id
+            path.to_string_lossy().to_string()
+        } else {
+            id_prefix
+        };
+        out.push(FileRecord {
+            id: key,
+            name: real_name,
+            path: path.clone(),
+            size: md.len(),
+            uploader,
+            created: file_mtime_secs(&path),
+            mtime: file_mtime_secs(&path),
+        });
+    }
+}
+
+/// 判断接收目录下某个一级名称是否真的是「上传者子目录」
+/// （避免把直接落在根目录的文件误判为来自名为 <文件名> 的设备）。
+fn rel_component_is_dir(base: &std::path::Path, name: &str) -> bool {
+    base.join(name).is_dir()
+}
+
+/// 把接收目录中的现有文件加载进内存元数据（启动时调用）。
+/// 只补充内存里还没有的条目，不动已有记录。
+fn restore_files_from_disk(st: &AppState) {
+    let base = st.inner.cfg.lock().unwrap().storage_dir.clone();
+    let scanned = scan_storage_dir(&base);
+    if scanned.is_empty() {
+        return;
+    }
+    let mut files = st.inner.files.lock().unwrap();
+    for rec in scanned {
+        // 同一路径已在内存中（本次会话上传的）则跳过，避免覆盖更精确的 created
+        if files.values().any(|r| r.path == rec.path) {
+            continue;
+        }
+        files.insert(rec.id.clone(), rec);
+    }
+}
+
+/// 把接收目录下的所有文件移动到新目录（保持「上传者子目录」结构）。
+/// 返回（成功数, 失败数）。同名冲突时加 `-1`、`-2` 后缀，不覆盖。
+fn move_storage_dir(old: &std::path::Path, new: &std::path::Path) -> (usize, usize) {
+    if old == new {
+        return (0, 0);
+    }
+    if std::fs::create_dir_all(new).is_err() {
+        return (0, 0);
+    }
+    let mut moved = 0usize;
+    let mut failed = 0usize;
+    let Ok(rd) = std::fs::read_dir(old) else {
+        return (0, 0);
+    };
+    for e in rd.flatten() {
+        let Ok(ft) = e.file_type() else { continue };
+        let from = e.path();
+        let name = e.file_name();
+        let to = new.join(&name);
+        if ft.is_dir() {
+            // 递归移动子目录内容（保留上传者目录层级）
+            let (m, f) = move_storage_dir(&from, &to);
+            moved += m;
+            failed += f;
+            // 空目录清理（移动干净后删掉，避免残留空壳）
+            let _ = std::fs::remove_dir(&from);
+        } else if ft.is_file() {
+            let target = unique_target(&to);
+            if std::fs::rename(&from, &target).is_ok() {
+                moved += 1;
+            } else {
+                // 跨盘符 rename 会失败（EXDEV），退化为「复制 + 删除」
+                if std::fs::copy(&from, &target).is_ok() && std::fs::remove_file(&from).is_ok() {
+                    moved += 1;
+                } else {
+                    failed += 1;
+                }
+            }
+        }
+    }
+    (moved, failed)
+}
+
+/// 目标已存在时生成不冲突的路径：`a.txt` → `a-1.txt` → `a-2.txt` …
+fn unique_target(path: &std::path::Path) -> PathBuf {
+    if !path.exists() {
+        return path.to_path_buf();
+    }
+    let parent = path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+    let stem = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let ext = path.extension().map(|s| s.to_string_lossy().to_string());
+    for i in 1..10_000 {
+        let candidate = match &ext {
+            Some(e) => parent.join(format!("{}-{}.{}", stem, i, e)),
+            None => parent.join(format!("{}-{}", stem, i)),
+        };
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    path.to_path_buf()
+}
+
+/// 递归删除空的子目录（保留根目录本身）。用于清空 / 删除后收拾残局。
+fn prune_empty_dirs(dir: &std::path::Path) {
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    for e in rd.flatten() {
+        let path = e.path();
+        if path.is_dir() {
+            prune_empty_dirs(&path);
+            // 删除后目录仍为空才移除
+            if std::fs::read_dir(&path).map(|mut r| r.next().is_none()).unwrap_or(false) {
+                let _ = std::fs::remove_dir(&path);
+            }
+        }
+    }
 }
 
 fn file_list(st: &AppState) -> Vec<serde_json::Value> {
@@ -853,6 +1213,23 @@ async fn delete_file_handler(
     } else {
         (StatusCode::NOT_FOUND, "not found").into_response()
     }
+}
+
+/// 清空所有历史文件。仅允许本机（控制面板）调用。
+async fn clear_files_handler(
+    State(st): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Query(q): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    if !addr.ip().is_loopback() {
+        return (StatusCode::FORBIDDEN, "forbidden").into_response();
+    }
+    let pwd = q.get("pwd").cloned().unwrap_or_default();
+    if !check_password(&st, &pwd) {
+        return (StatusCode::FORBIDDEN, "forbidden").into_response();
+    }
+    let (ok, fail) = st.clear_all_files();
+    Json(json!({ "ok": true, "deleted": ok, "failed": fail })).into_response()
 }
 
 async fn upload(
@@ -1173,3 +1550,4 @@ fn disconnect_device_by_id(st: &AppState, id: &str) {
         );
     }
 }
+
