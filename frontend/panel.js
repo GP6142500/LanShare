@@ -343,7 +343,7 @@
     // 后端已按时间倒序返回；这里不再反向，保证「最新在最上」
     const fs = files || [];
     if (!fs.length) {
-      box.innerHTML = '<div class="empty">暂无文件</div>';
+      box.innerHTML = '<div class="empty">本次启动后还没有上传文件</div>';
       return;
     }
     fs.forEach((f) => box.appendChild(buildFileRow(f, { showUploader: false })));
@@ -358,23 +358,26 @@
       const r = await fetch(base() + "/api/files?pwd=" + encodeURIComponent(hostPassword));
       if (r.ok) {
         const d = await r.json();
-        allFiles = d.files || [];
-        renderFiles(allFiles);
+        sessionFiles = d.files || [];
+        historyFiles = d.history || d.files || [];
+        renderFiles(sessionFiles);
         renderHistory();
       }
     } catch (e) {}
   }
 
   // ----------------- 历史页 -----------------
-  // 与传输页共用 allFiles；本页额外支持搜索（文件名 + 设备名）与清空全部
-  let allFiles = [];
+  // 传输页只显示「本次启动后上传」的文件（sessionFiles）；
+  // 历史页显示接收目录中的全部文件（historyFiles，含往期）。
+  let sessionFiles = [];
+  let historyFiles = [];
   let histQuery = "";
 
   function renderHistory() {
     const box = $("history-list");
     if (!box) return;
     const q = histQuery.trim().toLowerCase();
-    const fs = allFiles.filter((f) => {
+    const fs = historyFiles.filter((f) => {
       if (!q) return true;
       const name = (f.name || "").toLowerCase();
       const up = (f.uploader || "").toLowerCase();
@@ -385,17 +388,17 @@
     if (!fs.length) {
       box.innerHTML =
         '<div class="empty">' +
-        (allFiles.length ? "没有匹配的文件" : "接收目录中暂无文件") +
+        (historyFiles.length ? "没有匹配的文件" : "接收目录中暂无文件") +
         "</div>";
     } else {
       fs.forEach((f) => box.appendChild(buildFileRow(f, { showUploader: true })));
     }
 
     // 汇总：文件数 + 总大小（按全部，不受搜索影响）
-    const total = allFiles.reduce((s, f) => s + (f.size || 0), 0);
+    const total = historyFiles.reduce((s, f) => s + (f.size || 0), 0);
     const sum = $("hist-summary");
     if (sum) {
-      let text = "共 " + allFiles.length + " 个文件 · " + fmtSize(total);
+      let text = "共 " + historyFiles.length + " 个文件 · " + fmtSize(total);
       if (q) text += "（筛选出 " + fs.length + " 个）";
       sum.textContent = text;
     }
@@ -417,13 +420,13 @@
   const histClear = $("hist-clear");
   if (histClear) {
     histClear.onclick = async () => {
-      if (!allFiles.length) {
+      if (!historyFiles.length) {
         toast("没有可清空的文件");
         return;
       }
       if (
         !window.confirm(
-          "确定清空接收目录中的全部 " + allFiles.length + " 个文件？此操作不可恢复。"
+          "确定清空接收目录中的全部 " + historyFiles.length + " 个文件？此操作不可恢复。"
         )
       )
         return;
@@ -647,8 +650,9 @@
             serverPort = m.port || serverPort;
             renderPwd();
             renderDevices(m.devices || []);
-            allFiles = m.files || [];
-            renderFiles(allFiles);
+            sessionFiles = m.files || [];
+            historyFiles = m.history || m.files || [];
+            renderFiles(sessionFiles);
             renderHistory();
             if (typeof m.text === "string") applyRemoteText(m.text);
           }
@@ -657,8 +661,9 @@
           renderDevices(m.devices || []);
           break;
         case "file_list":
-          allFiles = m.files || [];
-          renderFiles(allFiles);
+          sessionFiles = m.files || [];
+          historyFiles = m.history || m.files || [];
+          renderFiles(sessionFiles);
           renderHistory();
           break;
         case "toast":

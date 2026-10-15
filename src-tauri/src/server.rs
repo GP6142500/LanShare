@@ -59,6 +59,9 @@ struct FileRecord {
     /// 磁盘上的最后修改时间（秒）。自清理用 mtime 判断「年龄」，
     /// 不依赖内存元数据（重启后可从磁盘恢复）。
     mtime: i64,
+    /// true = 本次运行期间上传的（传输页展示）；false = 从磁盘扫描出的历史文件。
+    /// 传输页只显示本次会话的，历史页显示全部。
+    session: bool,
 }
 
 #[derive(Clone)]
@@ -837,6 +840,7 @@ fn scan_into(base: &std::path::Path, dir: &std::path::Path, out: &mut Vec<FileRe
             uploader,
             created: file_mtime_secs(&path),
             mtime: file_mtime_secs(&path),
+            session: false, // 磁盘扫描出的历史文件
         });
     }
 }
@@ -946,20 +950,35 @@ fn prune_empty_dirs(dir: &std::path::Path) {
     }
 }
 
+/// 列表范围：传输页只看本次会话，历史页看全量。
+#[derive(Clone, Copy, PartialEq)]
+enum ListScope {
+    /// 仅本次运行期间上传的文件（传输页 / 设备端）
+    Session,
+    /// 接收目录中的全部文件（历史页）
+    All,
+}
+
+/// 浏览器端设备：不返回磁盘路径（避免泄露服务端目录结构），只看本次会话的文件。
 fn file_list(st: &AppState) -> Vec<serde_json::Value> {
-    build_file_list(st, false)
+    build_file_list(st, false, ListScope::Session)
 }
 
-/// 供主机（控制面板）使用，额外带上磁盘路径，便于「打开文件 / 打开所在位置」。
-/// 注意：不要把这个版本发给浏览器端设备，避免泄露服务端目录结构。
+/// 供主机（控制面板）「传输」页使用：本次会话上传的文件，带磁盘路径。
 fn file_list_with_path(st: &AppState) -> Vec<serde_json::Value> {
-    build_file_list(st, true)
+    build_file_list(st, true, ListScope::Session)
 }
 
-fn build_file_list(st: &AppState, with_path: bool) -> Vec<serde_json::Value> {
+/// 供主机「历史」页使用：接收目录中的全部文件（含往期），带磁盘路径。
+fn history_list_with_path(st: &AppState) -> Vec<serde_json::Value> {
+    build_file_list(st, true, ListScope::All)
+}
+
+fn build_file_list(st: &AppState, with_path: bool, scope: ListScope) -> Vec<serde_json::Value> {
     let files = st.inner.files.lock().unwrap();
     let mut list: Vec<serde_json::Value> = files
         .values()
+        .filter(|r| scope == ListScope::All || r.session)
         .map(|r| {
             let mut v = json!({
                 "id": r.id,
@@ -967,7 +986,8 @@ fn build_file_list(st: &AppState, with_path: bool) -> Vec<serde_json::Value> {
                 "size": r.size,
                 "uploader": r.uploader,
                 "created": r.created,
-                "mtime": r.mtime
+                "mtime": r.mtime,
+                "session": r.session
             });
             if with_path {
                 if let Some(obj) = v.as_object_mut() {
@@ -1184,14 +1204,16 @@ async fn list_files(
     if !check_password(&st, &pwd) {
         return (StatusCode::FORBIDDEN, "forbidden").into_response();
     }
-    // 仅本机（控制面板）返回磁盘路径，供「打开文件 / 打开所在位置」使用；
-    // 其他设备不返回 path，避免泄露服务端目录结构。
-    let files = if addr.ip().is_loopback() {
-        file_list_with_path(&st)
+    // 仅本机（控制面板）返回磁盘路径，供「打开文件 / 打开所在位置」使用，
+    // 并同时返回「本次会话」与「历史全量」两份列表；
+    // 其他设备只返回本次会话且不带 path，避免泄露服务端目录结构。
+    if addr.ip().is_loopback() {
+        let files = file_list_with_path(&st);
+        let history = history_list_with_path(&st);
+        Json(json!({ "files": files, "history": history })).into_response()
     } else {
-        file_list(&st)
-    };
-    Json(json!({ "files": files })).into_response()
+        Json(json!({ "files": file_list(&st) })).into_response()
+    }
 }
 
 /// 删除一个已接收的文件。仅允许本机（控制面板）调用 —— 其他设备无权删除服务端文件。
@@ -1287,6 +1309,7 @@ async fn upload(
             uploader: uploader.clone(),
             created: now_secs(),
             mtime: file_mtime_secs(&path),
+            session: true, // 本次会话上传 → 传输页会展示
         };
         st.inner.files.lock().unwrap().insert(id.clone(), rec);
         broadcast_files(&st);
@@ -1354,14 +1377,15 @@ async fn handle_socket(
             return;
         }
         *st.inner.host.lock().unwrap() = Some(tx.clone());
-        let (password, port, files, devices, shared_text) = {
+        let (password, port, files, history, devices, shared_text) = {
             let cfg = st.inner.cfg.lock().unwrap();
             let password = cfg.password.clone();
             let port = cfg.port;
-            let files = file_list_with_path(&st);
+            let files = file_list_with_path(&st); // 本次会话（传输页）
+            let history = history_list_with_path(&st); // 磁盘全量（历史页）
             let devices = st.devices();
             let shared_text = current_shared_text(&st);
-            (password, port, files, devices, shared_text)
+            (password, port, files, history, devices, shared_text)
         };
         let _ = sender
             .send(
@@ -1371,6 +1395,7 @@ async fn handle_socket(
                     "password": password,
                     "port": port,
                     "files": files,
+                    "history": history,
                     "devices": devices,
                     "text": shared_text
                 })
@@ -1525,9 +1550,11 @@ fn broadcast_devices(st: &AppState) {
     notify_host(st, &json!({ "type": "device_list", "devices": list }));
 }
 
+/// 通知主机刷新文件列表：`files` = 本次会话（传输页），`history` = 磁盘全量（历史页）
 fn broadcast_files(st: &AppState) {
     let files = file_list_with_path(st);
-    notify_host(st, &json!({ "type": "file_list", "files": files }));
+    let history = history_list_with_path(st);
+    notify_host(st, &json!({ "type": "file_list", "files": files, "history": history }));
 }
 
 fn notify_host(st: &AppState, msg: &serde_json::Value) {
