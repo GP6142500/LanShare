@@ -1,0 +1,64 @@
+# LanShare · 局域网文件与文本互传
+
+Windows 桌面应用：启动后在局域网内，其他设备用浏览器打开 `http://<本机IP>:<端口>` 即可互传文件与文本。中心辐射（hub-spoke）模型——Windows 主机运行服务，手机/笔记本/平板用各自浏览器访问，无需安装客户端。
+
+## 技术栈
+
+- **Tauri 2 + Rust**：原生窗口 + 系统托盘 + 内嵌 `axum` HTTP/WSS 服务
+- **轻量前端**：零依赖原生 HTML/CSS/JS（遵循简洁现代、克制点缀色、暗/亮自适应的设计语言，无 emoji）
+- 主机控制面板由 Tauri 资源服务加载；局域网客户端页面由 axum 直接内嵌服务
+
+> 说明：UI 设计语言参考 `ui.md` 规范，但为保持轻量，未引入 Next.js/shadcn 构建链，改用零依赖原生实现。如需 shadcn 质感可后续替换前端。
+
+## 功能
+
+- **文件互传（双向）**：设备 → 主机上传；主机「分享文件」→ 设备下载；接收历史按上传者分子目录落盘
+- **文本同步**：WebSocket 实时同步文本框，手动复制（规避了局域网 HTTP 下 `navigator.clipboard` 被禁用的限制）
+- **设备配对**：扫码/访问后首次需主机在控制面板「批准」，配对信息持久化，可随时撤销
+- **二维码**：控制面板展示本机局域网地址二维码，手机扫码直达
+- **接收目录**：可在控制面板修改落盘路径
+
+## 目录结构
+
+```
+lanshare/
+├── src-tauri/            # Rust 后端 + Tauri 壳
+│   ├── src/
+│   │   ├── main.rs       # Tauri 入口：窗口 / 托盘 / 启动服务 / 注入端口
+│   │   └── server.rs     # axum 服务：静态页 / 上传下载 / WS 文本 / 配对 / QR
+│   ├── web/
+│   │   └── client.html   # 内嵌的局域网客户端页面（零依赖、自包含）
+│   ├── icons/            # 应用图标
+│   ├── capabilities/     # Tauri 权限
+│   ├── Cargo.toml
+│   ├── build.rs
+│   └── tauri.conf.json
+└── frontend/             # 主机控制面板（Tauri 资源服务）
+    ├── index.html
+    ├── panel.js
+    └── styles.css
+```
+
+## 构建与运行
+
+前置：Rust 工具链（cargo 1.77+）、Node.js（含 pnpm/npm）、NSIS（用于 `nsis` 打包）、WebView2 运行时（Windows 11 自带）。
+
+```bash
+# 安装 Tauri CLI（若未装）
+npm install        # 会安装 @tauri-apps/cli
+
+# 开发模式（编译 Rust + 启动窗口）
+npm run dev
+
+# 打包为 Windows 安装包（nsis）
+npm run build
+```
+
+默认服务端口 `18765`，可在 `src-tauri/src/server.rs` 的 `load_config` 中修改，或运行时由 Tauri 启动逻辑注入。
+
+## 注意事项
+
+- **防火墙**：首次运行 Windows 防火墙需允许本程序通过（专用网络），否则局域网设备无法访问。
+- **多网卡**：若有多块网卡/虚拟网卡，控制面板会列出所有非回环 IPv4，请选择实际局域网那块。
+- **剪切板**：当前为「文本传输」而非系统剪切板自动同步；如需一键写入系统剪切板需启用 HTTPS（自签证书），留待后续版本。
+- **安全**：配对 + token 已阻止同网段误蹭；明文 HTTP 仅在可信局域网内使用，敏感场景建议后续启用 HTTPS。

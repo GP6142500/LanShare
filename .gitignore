@@ -1,0 +1,11 @@
+# Rust
+/target
+
+# Node
+node_modules
+dist
+*.log
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LanShare · 控制面板</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <div class="header">
+        <div class="brand">
+          <div class="logo">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7"/><path d="M12 3v13"/><path d="m8 7 4-4 4 4"/></svg>
+          </div>
+          <div>
+            <h1>LanShare</h1>
+            <p>局域网文件与文本互传</p>
+          </div>
+        </div>
+        <div class="status">
+          <span id="status-dot" class="dot"></span>
+          <span id="status-text">连接中…</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="16" y="16" width="6" height="6" rx="1"/><path d="M12 8v4M12 12h-3v4M12 12h3v4"/></svg>
+          连接信息
+        </h2>
+        <div class="row">
+          <div style="flex: 1; min-width: 240px">
+            <div class="muted" style="margin-bottom: 4px">局域网地址（其他设备浏览器打开）</div>
+            <div id="ip-list" class="ip-list"></div>
+            <div style="margin-top: 10px" class="copy-url" id="client-url"></div>
+          </div>
+          <div style="text-align: center">
+            <div class="qr" id="qr-box"><span class="muted" style="font-size:12px">二维码</span></div>
+            <div class="muted" style="font-size: 11px; margin-top: 6px">手机扫码直达</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section-split">
+        <div class="card">
+          <h2>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4 6v6c0 5 3.4 7.7 8 9 4.6-1.3 8-4 8-9V6z"/></svg>
+            配对设备
+          </h2>
+          <div class="muted" style="margin-bottom: 8px">其他设备首次访问需在这里批准</div>
+          <div id="pending-list" class="list"></div>
+          <div id="paired-list" class="list" style="margin-top: 10px"></div>
+        </div>
+
+        <div class="card">
+          <h2>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7L9 4H5a2 2 0 0 0-2 2z"/></svg>
+            接收目录
+          </h2>
+          <div class="muted" style="margin-bottom: 8px">文件落盘位置（按上传者分子目录）</div>
+          <div class="row">
+            <input id="storage-input" type="text" placeholder="选择接收目录" />
+          </div>
+          <div class="row" style="margin-top: 10px">
+            <button class="primary" id="storage-save">保存目录</button>
+            <button id="storage-open" class="ghost">打开文件夹</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
+          分享文件（给设备下载）
+        </h2>
+        <div class="row">
+          <input id="share-file" type="file" multiple />
+          <button class="primary" id="share-btn">上传分享</button>
+        </div>
+        <hr class="sep" />
+        <h2 style="margin-bottom: 8px">接收历史</h2>
+        <div id="file-list" class="list"></div>
+      </div>
+
+      <div class="card">
+        <h2>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M8 9h8M8 13h6"/></svg>
+          文本同步
+        </h2>
+        <div class="muted" style="margin-bottom: 8px">输入并发送后，所有已连接设备实时收到；也可复制他人发来的文本</div>
+        <textarea id="text-out" placeholder="在此输入要同步的文本，点发送…"></textarea>
+        <div class="row" style="margin-top: 10px; justify-content: space-between">
+          <button class="primary" id="text-send">发送</button>
+          <span class="muted" id="text-hint"></span>
+        </div>
+        <hr class="sep" />
+        <div class="muted" style="margin-bottom: 6px">收到的文本</div>
+        <textarea id="text-in" readonly placeholder="等待接收…"></textarea>
+        <div class="row" style="margin-top: 8px; justify-content: flex-end">
+          <button class="ghost" id="text-copy">复制</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="panel.js"></script>
+  </body>
+</html>

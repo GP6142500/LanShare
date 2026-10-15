@@ -1,0 +1,29 @@
+[package]
+name = "lanshare"
+version = "0.1.0"
+description = "局域网文件与文本互传"
+authors = ["高鹏"]
+edition = "2021"
+rust-version = "1.77"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+axum = "0.7"
+futures-util = "0.3"
+get-if-addrs = "0.1"
+qrcode = { version = "0.12", features = ["svg"] }
+uuid = { version = "1", features = ["v4"] }
+mime_guess = "2"
+percent-encoding = "2"
+dirs = "5"
+tower-http = { version = "0.5", features = ["cors"] }
+
+[features]
+# Default to nothing; Tauri enables what it needs.
+default = []

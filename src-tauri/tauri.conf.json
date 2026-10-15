@@ -1,0 +1,46 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "LanShare",
+  "version": "0.1.0",
+  "identifier": "com.lanshare.app",
+  "build": {
+    "beforeDevCommand": "",
+    "beforeBuildCommand": "",
+    "frontendDist": "../frontend"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "LanShare · 局域网互传",
+        "width": 920,
+        "height": 680,
+        "minWidth": 720,
+        "minHeight": 560,
+        "resizable": true,
+        "fullscreen": false,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "nsis",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "shortDescription": "局域网文件与文本互传",
+    "windows": {
+      "nsis": {
+        "displayLanguageSelector": false
+      }
+    }
+  }
+}

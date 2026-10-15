@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+    <title>LanShare · 传文件</title>
+    <style>
+      :root {
+        --accent: #4f46e5;
+        --accent-soft: rgba(79, 70, 229, 0.1);
+        --bg: #f6f7f9;
+        --panel: #ffffff;
+        --text: #1f2430;
+        --muted: #6b7280;
+        --border: #e6e8ec;
+        --radius: 12px;
+        --shadow: 0 1px 3px rgba(16, 24, 40, 0.08);
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --accent: #6f67f0;
+          --accent-soft: rgba(111, 103, 240, 0.14);
+          --bg: #0f1115;
+          --panel: #171a21;
+          --text: #e6e9ef;
+          --muted: #9aa3b2;
+          --border: #262b36;
+          --shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Microsoft YaHei", Roboto, Helvetica, Arial, sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      .app { max-width: 560px; margin: 0 auto; padding: 22px 16px 48px; }
+      .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
+      .brand { display: flex; align-items: center; gap: 10px; }
+      .logo { width: 32px; height: 32px; border-radius: 9px; background: var(--accent); display: grid; place-items: center; color: #fff; }
+      .brand h1 { font-size: 16px; font-weight: 600; margin: 0; }
+      .brand p { margin: 0; font-size: 12px; color: var(--muted); }
+      .status { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); }
+      .dot { width: 8px; height: 8px; border-radius: 50%; background: #c2c7d0; }
+      .dot.on { background: #22c55e; }
+      .dot.off { background: #ef4444; }
+      .card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin-bottom: 14px; box-shadow: var(--shadow); }
+      .card h2 { font-size: 13px; font-weight: 600; margin: 0 0 12px; display: flex; align-items: center; gap: 8px; }
+      .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+      .muted { color: var(--muted); }
+      button { font: inherit; cursor: pointer; border-radius: 9px; border: 1px solid var(--border); background: var(--panel); color: var(--text); padding: 8px 14px; transition: .15s; }
+      button:hover { border-color: var(--accent); }
+      button:disabled { opacity: .5; cursor: default; }
+      button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+      button.ghost { background: transparent; border-color: transparent; color: var(--accent); padding: 4px 8px; }
+      input[type="text"], input[type="file"] { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--border); border-radius: 9px; padding: 8px 11px; width: 100%; }
+      input:focus { outline: none; border-color: var(--accent); }
+      .list { display: flex; flex-direction: column; gap: 8px; }
+      .item { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; }
+      .item .name { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .item .sub { font-size: 12px; color: var(--muted); }
+      .item .acts { display: flex; gap: 6px; flex-shrink: 0; }
+      textarea { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; width: 100%; min-height: 92px; resize: vertical; }
+      textarea:focus { outline: none; border-color: var(--accent); }
+      .empty { color: var(--muted); font-size: 13px; padding: 6px 2px; }
+      .banner { padding: 12px; border-radius: 10px; background: var(--accent-soft); color: var(--accent); font-size: 13px; margin-bottom: 12px; }
+      hr.sep { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
+      .hidden { display: none; }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <div class="header">
+        <div class="brand">
+          <div class="logo">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7"/><path d="M12 3v13"/><path d="m8 7 4-4 4 4"/></svg>
+          </div>
+          <div>
+            <h1>LanShare</h1>
+            <p>向这台电脑传文件 / 文本</p>
+          </div>
+        </div>
+        <div class="status">
+          <span id="dot" class="dot"></span>
+          <span id="stext">连接中…</span>
+        </div>
+      </div>
+
+      <div id="need-pair" class="banner hidden">已发送配对请求，请在电脑上的 LanShare 控制面板点击「批准」。</div>
+
+      <div class="card">
+        <h2>我的设备名</h2>
+        <div class="row">
+          <input id="name" type="text" placeholder="例如：我的手机" />
+          <button id="name-save" class="primary">保存</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>发送文件到电脑</h2>
+        <div class="row">
+          <input id="file" type="file" multiple />
+          <button id="upload" class="primary" disabled>上传</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>可下载文件</h2>
+        <div id="files" class="list"><div class="empty">暂无文件</div></div>
+      </div>
+
+      <div class="card">
+        <h2>文本同步</h2>
+        <textarea id="out" placeholder="输入文本，点发送…"></textarea>
+        <div class="row" style="margin-top: 10px; justify-content: space-between">
+          <button id="send" class="primary">发送</button>
+          <span class="muted" id="hint"></span>
+        </div>
+        <hr class="sep" />
+        <textarea id="in" readonly placeholder="收到的文本"></textarea>
+        <div class="row" style="margin-top: 8px; justify-content: flex-end">
+          <button id="copy" class="ghost">复制</button>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      (function () {
+        var base = location.origin;
+        var token = localStorage.getItem("lanshare_token") || "";
+        var name = localStorage.getItem("lanshare_name") || "我的设备";
+        var ws = null, retry = null, paired = !!token;
+
+        var $ = function (id) { return document.getElementById(id); };
+        $("name").value = name;
+
+        function setStatus(on) {
+          $("dot").className = "dot " + (on ? "on" : "off");
+          $("stext").textContent = on ? "已连接" : "连接断开，重试中…";
+        }
+        function setPaired(p) {
+          paired = p;
+          $("upload").disabled = !p;
+          if (p) $("need-pair").classList.add("hidden");
+        }
+
+        function refreshFiles() {
+          if (!paired) return;
+          fetch(base + "/api/files")
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+              var box = $("files");
+              box.innerHTML = "";
+              var fs = (d.files || []).slice().reverse();
+              if (!fs.length) { box.innerHTML = '<div class="empty">暂无文件</div>'; return; }
+              fs.forEach(function (f) {
+                var item = document.createElement("div");
+                item.className = "item";
+                item.innerHTML = '<div class="meta"><div class="name"></div><div class="sub"></div></div><div class="acts"></div>';
+                item.querySelector(".name").textContent = f.name;
+                item.querySelector(".sub").textContent = f.uploader + " · " + (f.size / 1024).toFixed(1) + " KB";
+                var dl = document.createElement("button");
+                dl.className = "ghost";
+                dl.textContent = "下载";
+                dl.onclick = function () {
+                  var a = document.createElement("a");
+                  a.href = base + "/api/download/" + f.id + "?token=" + encodeURIComponent(token);
+                  a.download = f.name;
+                  a.click();
+                };
+                item.querySelector(".acts").appendChild(dl);
+                box.appendChild(item);
+              });
+            })
+            .catch(function () {});
+        }
+
+        function send(obj) {
+          if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
+        }
+
+        function connect() {
+          var q = "role=device&name=" + encodeURIComponent(name);
+          if (token) q += "&token=" + encodeURIComponent(token);
+          ws = new WebSocket(base + "/ws?" + q);
+          ws.onopen = function () {
+            setStatus(true);
+            if (retry) clearInterval(retry);
+            refreshFiles();
+          };
+          ws.onclose = function () {
+            setStatus(false);
+            if (!retry) retry = setInterval(connect, 2500);
+          };
+          ws.onmessage = function (ev) {
+            var m;
+            try { m = JSON.parse(ev.data); } catch (e) { return; }
+            if (m.type === "welcome") {
+              if (m.role === "device") setPaired(m.paired);
+            } else if (m.type === "paired") {
+              token = m.token;
+              name = m.name || name;
+              localStorage.setItem("lanshare_token", token);
+              localStorage.setItem("lanshare_name", name);
+              setPaired(true);
+              refreshFiles();
+            } else if (m.type === "revoked") {
+              token = "";
+              localStorage.removeItem("lanshare_token");
+              setPaired(false);
+              $("need-pair").classList.remove("hidden");
+            } else if (m.type === "text") {
+              $("in").value = m.value;
+              $("hint").textContent = "来自电脑";
+            }
+          };
+        }
+
+        // 未配对时提示
+        if (!token) $("need-pair").classList.remove("hidden");
+
+        $("name-save").onclick = function () {
+          name = $("name").value.trim() || "我的设备";
+          localStorage.setItem("lanshare_name", name);
+          if (ws) ws.close();
+          connect();
+        };
+        $("upload").onclick = function () {
+          var input = $("file");
+          for (var i = 0; i < input.files.length; i++) {
+            var fd = new FormData();
+            fd.append("file", input.files[i]);
+            fetch(base + "/api/upload?token=" + encodeURIComponent(token), { method: "POST", body: fd })
+              .catch(function () {});
+          }
+          input.value = "";
+          setTimeout(refreshFiles, 600);
+        };
+        $("send").onclick = function () {
+          var v = $("out").value;
+          if (v) send({ type: "text", value: v });
+        };
+        $("copy").onclick = function () {
+          var v = $("in").value;
+          if (v) {
+            if (navigator.clipboard) navigator.clipboard.writeText(v).catch(fallbackCopy);
+            else fallbackCopy();
+          }
+        };
+        function fallbackCopy() {
+          $("in").select();
+          try { document.execCommand("copy"); } catch (e) {}
+        }
+
+        connect();
+        setInterval(refreshFiles, 5000);
+      })();
+    </script>
+  </body>
+</html>
