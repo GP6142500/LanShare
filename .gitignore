@@ -12,3 +12,7 @@ dist
 # OS
 .DS_Store
 Thumbs.db
+
+# E2E 测试生成的截图（*-preview.png），只作本地人工核对用，不入库
+# 注意：不要用宽泛的 *.png，src-tauri/icons/*.png 是必须提交的应用图标
+*-preview.png

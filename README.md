@@ -85,6 +85,12 @@ lanshare/
     ├── index.html
     ├── panel.js
     └── styles.css
+
+scripts/
+└── release.sh            # 通过 GitHub API 发布 Release（需 GITHUB_TOKEN）
+
+e2e_*.mjs                 # 端到端测试脚本（Node，无需额外依赖）
+verify_mask.html          # 拖拽遮罩的浏览器渲染验证页
 ```
 
 ## 构建与运行
@@ -109,6 +115,39 @@ cargo test --manifest-path src-tauri/Cargo.toml --bin lanshare
 
 默认服务端口 `18765`，可在「设置」中运行期修改（立即生效）；也可改 `src-tauri/src/server.rs` 的 `config_dir()`/默认配置。
 
+## 发布 Release
+
+打包产物位于：
+
+```
+src-tauri/target/release/bundle/nsis/LanShare_<版本>_x64-setup.exe
+```
+
+发布到 GitHub Releases 有两种方式。
+
+### 方式一：网页手动上传（最简单）
+
+1. 打开 <https://github.com/GP6142500/LanShare/releases/new>
+2. **Choose a tag** 填 `v0.1.0`（一般等于 `src-tauri/tauri.conf.json` 里的 `version`），点「Create new tag on publish」
+3. 填标题，点 **Generate release notes** 自动生成变更说明
+4. 把 `LanShare_0.1.0_x64-setup.exe` 拖进 **Attach binaries** 区域
+5. 点 **Publish release**
+
+### 方式二：脚本上传（可重复、适合自动化）
+
+需要先生成一个 Personal Access Token（classic 勾 `repo`；fine-grained 勾 `Contents: Read and write`）：
+
+<https://github.com/settings/tokens>
+
+```bash
+export GITHUB_TOKEN=ghp_xxxxxxxx          # 仅用于 API 调用，不写入 git config
+bash scripts/release.sh                    # 版本号自动从 tauri.conf.json 读取
+bash scripts/release.sh 0.2.0 --draft      # 或指定版本 + 存为草稿
+```
+
+脚本会创建（或复用已存在的）tag、上传安装包，最后打印下载地址与 Release 页面链接。
+发布前记得先把 `src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`package.json` 三处版本号改成一致。
+
 ## 端到端测试
 
 仓库根目录的 `e2e_*.mjs` 为 Node 脚本（无需额外依赖）：
@@ -129,8 +168,11 @@ node e2e_qr_and_client.mjs        "$EXE"
 
 # 真实浏览器渲染（Edge headless + CDP，需要 file:// URL）
 node e2e_firewall_render.mjs      "file:///.../frontend/index.html"
+node e2e_about_render.mjs         "file:///.../frontend/index.html"
 node e2e_drop_mask_render.mjs     "file:///.../verify_mask.html"
 ```
+
+测试过程中生成的截图（`*-preview.png`）已加入 `.gitignore`，仅作本地人工核对用，不入库。
 
 测试用 `LANSHARE_CONFIG_DIR` 环境变量把配置目录指向临时目录，因此**不会改动你的真实配置**。
 
