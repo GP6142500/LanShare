@@ -54,20 +54,37 @@
             <p>连接信息与快速控制</p>
           </div>
 
+          <!-- 防火墙未放行时的醒目提示：只在真的连不上时才出现，可关闭 -->
+          <div class="alert hidden" id="fw-alert">
+            <div class="alert-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 3 6v6c0 5 3.8 9.4 9 10 5.2-.6 9-5 9-10V6z"/><path d="M12 8v5"/><path d="M12 16h.01"/></svg>
+            </div>
+            <div class="alert-body">
+              <div class="alert-title">局域网设备可能连不上</div>
+              <div class="alert-text" id="fw-text"></div>
+              <div class="alert-actions">
+                <button id="fw-fix" class="primary sm">一键放行</button>
+                <button id="fw-recheck" class="ghost sm">重新检测</button>
+                <button id="fw-dismiss" class="ghost sm">不再提示</button>
+              </div>
+              <div class="alert-msg muted" id="fw-msg"></div>
+            </div>
+          </div>
+
           <div class="card">
             <h3>连接信息</h3>
             <div class="row top">
               <div style="flex: 1; min-width: 240px">
                 <div class="muted" style="margin-bottom: 6px">局域网地址（其他设备浏览器打开）</div>
                 <div id="ip-list" class="ip-list"></div>
-                <div style="margin-top: 12px" class="copy-url" id="client-url"></div>
-                <div class="muted" style="margin-top: 8px">
-                  用手机扫码或浏览器访问上述地址，输入连接密码即可连接。
+                <div class="copy-url" id="client-url"></div>
+                <div class="muted" style="margin-top: 10px">
+                  手机扫码可自动连接，无需输入密码；用浏览器手动打开上面的地址则需输入密码。
                 </div>
               </div>
-              <div style="text-align: center">
+              <div class="qr-side">
                 <div class="qr" id="qr-box"><span class="muted">二维码</span></div>
-                <div class="muted" style="margin-top: 6px">手机扫码直达</div>
+                <button id="qr-refresh" class="ghost qr-refresh">刷新二维码</button>
               </div>
             </div>
           </div>
@@ -152,6 +169,19 @@
               <div id="file-list" class="list"></div>
             </div>
           </div>
+
+          <!-- 拖拽上传遮罩：拖文件到本页时显示 -->
+          <div id="drop-mask" class="drop-mask hidden">
+            <div class="drop-mask-box">
+              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <path d="M12 3v13"/>
+                <path d="m7 8 5-5 5 5"/>
+              </svg>
+              <div class="drop-mask-title">松开即可上传</div>
+              <div class="drop-mask-sub">文件将保存到本机接收目录</div>
+            </div>
+          </div>
         </section>
 
         <!-- 历史 -->
@@ -186,7 +216,7 @@
         <section class="view" id="view-settings">
           <div class="view-head">
             <h2>设置</h2>
-            <p>常规设置</p>
+            <p>修改后自动保存</p>
           </div>
 
           <div class="card">
@@ -200,13 +230,13 @@
 
           <div class="card">
             <h3>服务端口</h3>
-            <div class="muted" style="margin-bottom: 8px">修改端口后服务会自动重启。</div>
+            <div class="muted" style="margin-bottom: 8px">修改后立即生效：服务会自动切到新端口，已连接设备需用新地址重新打开。</div>
             <input id="set-port" type="number" min="1024" max="65535" />
           </div>
 
           <div class="card">
             <h3>接收目录</h3>
-            <div class="muted" style="margin-bottom: 8px">文件落盘位置（按上传者分子目录）。</div>
+            <div class="muted" style="margin-bottom: 8px">文件落盘位置（按上传者分子目录）。修改后会立即迁移已有文件。</div>
             <input id="storage-input" type="text" placeholder="选择接收目录" />
             <div class="row" style="margin-top: 10px">
               <button id="storage-pick" class="ghost">选择目录</button>
@@ -236,15 +266,51 @@
             <div class="muted" id="cleanup-preview" style="margin-top: 10px"></div>
           </div>
 
+          <div class="card">
+            <h3>防火墙放行</h3>
+            <div class="muted" style="margin-bottom: 10px">
+              Windows 默认拦截外部设备的入站连接。放行规则绑定的是本程序，而不是端口，所以之后改端口无需重新设置。
+            </div>
+            <div class="row between">
+              <div class="row">
+                <span id="fw-dot" class="dot"></span>
+                <span id="fw-state-text" class="muted">检测中…</span>
+              </div>
+              <div class="row">
+                <button id="fw-allow" class="primary sm">一键放行</button>
+                <button id="fw-check" class="ghost sm">重新检测</button>
+              </div>
+            </div>
+            <div class="muted" id="fw-detail" style="margin-top: 10px"></div>
+          </div>
+
+          <div class="card" id="about-card">
+            <h3>关于</h3>
+            <div class="about-grid">
+              <div class="about-key">版本</div>
+              <div class="about-val"><span id="about-version">—</span></div>
+              <div class="about-key">构建时间</div>
+              <div class="about-val" id="about-built">—</div>
+              <div class="about-key">技术栈</div>
+              <div class="about-val">Tauri 2 · Rust · axum · 原生 HTML/CSS/JS</div>
+              <div class="about-key">配置文件</div>
+              <div class="about-val" id="about-config">—</div>
+              <div class="about-key">程序路径</div>
+              <div class="about-val" id="about-program">—</div>
+            </div>
+          </div>
+
           <div class="row" style="margin-top: 4px">
-            <button class="primary" id="settings-save">保存设置</button>
             <span id="settings-msg" class="muted"></span>
           </div>
         </section>
       </main>
     </div>
 
+    <!-- 重启确认弹窗已移除：端口/目录改动即时生效，无需重启 -->
+
     <div id="toast" class="toast hidden"></div>
+    <div id="settings-save-toast" class="save-toast hidden">设置已保存</div>
 
     <script src="panel.js"></script>
   </body>

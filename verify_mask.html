@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<!-- 拖拽遮罩渲染验证页：引用真实的 styles.css 与 panel.js 的 initDropZone 逻辑 -->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<link rel="stylesheet" href="frontend/styles.css" />
+<style> body { margin: 0; padding: 40px; } </style>
+</head>
+<body>
+  <section id="view-devices" class="view active active-inner">
+    <h1>传输页（验证用）</h1>
+    <!-- 拖拽上传遮罩：与 index.html 中一致 -->
+    <div id="drop-mask" class="drop-mask hidden">
+      <div class="drop-mask-box">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <path d="M12 3v13"/>
+          <path d="m7 8 5-5 5 5"/>
+        </svg>
+        <div class="drop-mask-title">松开即可上传</div>
+        <div class="drop-mask-sub">文件将保存到本机接收目录</div>
+      </div>
+    </div>
+  </section>
+  <script>
+    // 与 panel.js 的 initDropZone 同一套逻辑（手工同步）
+    (function initDropZone() {
+      const view = document.getElementById("view-devices");
+      const mask = document.getElementById("drop-mask");
+      if (!view || !mask) return;
+      let depth = 0;
+      const isActive = () => view.classList.contains("active");
+      function hasFiles(e) {
+        const dt = e.dataTransfer;
+        if (!dt) return false;
+        const types = Array.from(dt.types || []);
+        return types.indexOf("Files") >= 0;
+      }
+      function show() { mask.classList.remove("hidden"); }
+      function hide() { depth = 0; mask.classList.add("hidden"); }
+      window.addEventListener("dragenter", (e) => {
+        if (!isActive() || !hasFiles(e)) return;
+        e.preventDefault(); depth++; show();
+      });
+      window.addEventListener("dragover", (e) => {
+        if (!isActive() || !hasFiles(e)) return;
+        e.preventDefault();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+      });
+      window.addEventListener("dragleave", (e) => {
+        if (!isActive()) return;
+        if (!e.relatedTarget) { hide(); return; }
+        depth--;
+        if (depth <= 0) hide();
+      });
+      window.addEventListener("drop", (e) => {
+        e.preventDefault(); hide();
+      });
+      window.addEventListener("lan-view-change", hide);
+    })();
+  </script>
+</body>
+</html>

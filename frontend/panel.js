@@ -2,7 +2,10 @@
 (function () {
   let serverPort = window.__LAN_PORT || 18765;
   let hostPassword = "";
+  // cfg 在 get_config 返回前只是占位桩，不能拿它做「是否已修改」的比对，
+  // 否则刚启动就会被判定成「端口/目录被改过」。cfgLoaded 标记真实配置是否已就位。
   let cfg = { port: serverPort, password: "", storage_dir: "", auto_start: true };
+  let cfgLoaded = false;
   let ws = null;
   let wantConnect = false;
   let retry = null;
@@ -36,6 +39,8 @@
     document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
     const target = $("view-" + name);
     if (target) target.classList.add("active");
+    // 广播视图切换：拖拽遮罩等依赖「当前页」的逻辑据此收起状态
+    window.dispatchEvent(new Event("lan-view-change"));
     // 传输页可见后才能测量左卡高度（隐藏时 offsetHeight 为 0）
     if (name === "devices") requestAnimationFrame(syncTxMinHeight);
   }
@@ -116,11 +121,154 @@
     await refreshStatus();
   };
 
+  // ----------------- 防火墙检测 / 一键放行 -----------------
+  //
+  // Windows 默认拦所有入站连接：装到新电脑后本机自己访问 127.0.0.1 没问题，
+  // 但手机/另一台电脑走局域网 IP 连就被丢弃。放行规则绑定的是「程序路径」
+  // 而不是端口，所以之后改端口 / 换网络都不用重新加规则。
+  const FW_DISMISS_KEY = "lanshare.fw.dismissed";
+
+  /// 读取「不再提示」的标记。用 try 包住：file:// 下 localStorage 可能被禁用。
+  function fwDismissed() {
+    try {
+      return localStorage.getItem(FW_DISMISS_KEY) === "1";
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function setFwDismissed(v) {
+    try {
+      if (v) localStorage.setItem(FW_DISMISS_KEY, "1");
+      else localStorage.removeItem(FW_DISMISS_KEY);
+    } catch (e) {}
+  }
+
+  function showFwAlert(text) {
+    const box = $("fw-alert");
+    if (!box) return;
+    $("fw-text").textContent = text;
+    box.classList.remove("hidden");
+  }
+
+  function hideFwAlert() {
+    const box = $("fw-alert");
+    if (box) box.classList.add("hidden");
+  }
+
+  /// 把检测结果同时反映到「设置页」的状态行（圆点 + 文案 + 详情）。
+  function renderFwState(info) {
+    const dot = $("fw-dot");
+    const text = $("fw-state-text");
+    const detail = $("fw-detail");
+    if (!dot || !text) return;
+    if (!info || info.status === "unknown") {
+      dot.className = "dot off";
+      text.textContent = "无法检测（非 Windows 或系统查询不可用）";
+      if (detail) detail.textContent = "";
+      return;
+    }
+    if (info.status === "allowed") {
+      dot.className = "dot on";
+      text.textContent = "已放行，局域网设备可正常连接";
+      if (detail) detail.textContent = info.program ? "已放行程序：" + info.program : "";
+    } else {
+      dot.className = "dot off";
+      text.textContent = "未放行，局域网设备可能连不上";
+      if (detail) {
+        detail.textContent = info.program
+          ? "待放行程序：" + info.program + "　（提示：系统弹窗可能只给「一种网络类型」加了规则，换到别的网络仍会被拦；点「一键放行」会补齐全部网络类型。）"
+          : "";
+      }
+    }
+  }
+
+  /// 检测防火墙放行状态，决定是否显示提示条。
+  /// 只有在「明确没放行」（blocked）且用户没点过「不再提示」时才弹。
+  async function checkFirewall(opts) {
+    const manual = !!(opts && opts.manual);
+    // 两个入口（首页横幅 / 设置页）共用同一套按钮禁用逻辑
+    const btns = ["fw-recheck", "fw-check"].map($).filter(Boolean);
+    if (manual) btns.forEach((b) => (b.disabled = true));
+    const info = await safe("firewall_status");
+    if (manual) btns.forEach((b) => (b.disabled = false));
+    if (!info) return;
+    renderFwState(info);
+    if (info.status === "allowed") {
+      // 已放行：收起横幅，并清掉旧的「不再提示」（下次换环境重新检测才有意义）
+      hideFwAlert();
+      setFwDismissed(false);
+      if (manual) toast("防火墙已放行本程序");
+      return;
+    }
+    if (info.status === "unknown") {
+      // 检测不了（非 Windows / PowerShell 不可用）就不下结论、不打扰用户
+      hideFwAlert();
+      if (manual) toast("无法检测防火墙状态");
+      return;
+    }
+    // blocked
+    if (fwDismissed() && !manual) {
+      hideFwAlert();
+      return;
+    }
+    setFwDismissed(false);
+    const where = info.program ? "（" + info.program + "）" : "";
+    showFwAlert(
+      "当前程序" + where + "尚未被 Windows 防火墙放行，同一局域网下的手机 / 电脑可能连不上。点击「一键放行」后按提示授权即可（只需一次，之后改端口也不用再设置）。"
+    );
+  }
+
+  /// 一键放行：UAC 提权加规则，然后重新检测确认（不凭「点了按钮」就假装成功）。
+  async function runFirewallFix(btn, msgEl) {
+    if (msgEl) msgEl.textContent = "正在请求管理员授权…";
+    if (btn) btn.disabled = true;
+    try {
+      await invoke("firewall_fix");
+    } catch (e) {
+      if (msgEl) msgEl.textContent = typeof e === "string" ? e : "放行失败";
+      if (btn) btn.disabled = false;
+      return;
+    }
+    if (btn) btn.disabled = false;
+    await checkFirewall({ manual: true });
+    const after = await safe("firewall_status");
+    if (msgEl) msgEl.textContent = "";
+    if (after && after.status === "allowed") {
+      toast("已放行局域网访问");
+    } else if (after && after.status === "blocked") {
+      if (msgEl) msgEl.textContent = "规则未生效，可稍后点「重新检测」再试，或手动确认安全软件拦截。";
+    }
+  }
+
+  const fwFixBtn = $("fw-fix");
+  if (fwFixBtn) fwFixBtn.onclick = () => runFirewallFix(fwFixBtn, $("fw-msg"));
+
+  const fwRecheckBtn = $("fw-recheck");
+  if (fwRecheckBtn) fwRecheckBtn.onclick = () => checkFirewall({ manual: true });
+
+  // 设置页那组控件
+  const fwAllowBtn = $("fw-allow");
+  if (fwAllowBtn) fwAllowBtn.onclick = () => runFirewallFix(fwAllowBtn, $("fw-detail"));
+  const fwCheckBtn = $("fw-check");
+  if (fwCheckBtn) fwCheckBtn.onclick = () => checkFirewall({ manual: true });
+
+  const fwDismissBtn = $("fw-dismiss");
+  if (fwDismissBtn) {
+    fwDismissBtn.onclick = () => {
+      setFwDismissed(true);
+      hideFwAlert();
+      toast("已隐藏提示，可在设置页重新检测");
+    };
+  }
+
   // ----------------- 配置 / 二维码 -----------------
+
   async function loadConfig() {
     const c = await safe("get_config");
     if (c) {
       cfg = c;
+      cfgLoaded = true;
       serverPort = c.port;
       hostPassword = c.password || "";
       $("storage-input").value = c.storage_dir || "";
@@ -136,20 +284,41 @@
       const d = await r.json();
       const list = $("ip-list");
       list.innerHTML = "";
-      (d.lan_ips || []).forEach((ip) => {
-        const el = document.createElement("span");
-        el.className = "ip-chip";
+      (d.lan_ips || []).forEach((ip, idx) => {
+        const el = document.createElement("button");
+        el.type = "button";
+        el.className = "ip-chip" + (idx === 0 ? " active" : "");
         el.textContent = ip + ":" + d.port;
+        el.title = "点击将二维码切换到该地址";
+        el.onclick = () => {
+          list.querySelectorAll(".ip-chip").forEach((x) => x.classList.remove("active"));
+          el.classList.add("active");
+          $("client-url").textContent = "http://" + ip + ":" + d.port;
+          loadQr(ip);
+        };
         list.appendChild(el);
       });
       $("client-url").textContent = d.client_url;
     } catch (e) {}
+    loadQr();
+  }
+
+  async function loadQr(ip) {
     try {
-      const svg = await (await fetch(base() + "/api/qr")).text();
+      const url = ip ? base() + "/api/qr?ip=" + encodeURIComponent(ip) : base() + "/api/qr";
+      const svg = await (await fetch(url)).text();
       $("qr-box").innerHTML = svg;
     } catch (e) {
       $("qr-box").innerHTML = '<span class="muted">二维码不可用</span>';
     }
+  }
+
+  /// 重新生成扫码免密令牌（换密码 / 手动刷新时调用），并刷新二维码。
+  /// 令牌本身不展示在界面上（避免被截图/投屏泄露），仅由二维码承载。
+  async function rotateScanToken() {
+    await safe("rotate_scan_token");
+    const active = document.querySelector("#ip-list .ip-chip.active");
+    await loadQr(active ? active.textContent.split(":")[0] : null);
   }
 
   // ----------------- 密码展示 -----------------
@@ -179,7 +348,14 @@
       renderPwd();
       toast("连接密码已重置");
       await loadConfig();
+      await rotateScanToken();
     }
+  };
+
+  /// 手动刷新二维码：换一个免密令牌（旧扫码链接立即失效）
+  $("qr-refresh").onclick = async () => {
+    await rotateScanToken();
+    toast("二维码已刷新");
   };
 
   // ----------------- 已连接设备 -----------------
@@ -500,11 +676,15 @@
   // ----------------- 分享文件 -----------------
   // 点击图标 → 打开系统文件选择器；选中后立即上传，无需二次点击
   $("share-pick").onclick = () => $("share-file").click();
-  $("share-file").onchange = () => uploadFiles();
+  $("share-file").onchange = () => {
+    uploadFiles(Array.from($("share-file").files || []));
+    $("share-file").value = "";
+  };
 
-  async function uploadFiles() {
-    const input = $("share-file");
-    const files = Array.from(input.files || []);
+  /// 上传一批文件到本机接收目录。
+  /// files 由「选择文件」或「拖拽到传输页」两条路径传入，逻辑共用。
+  async function uploadFiles(files) {
+    files = (files || []).filter(Boolean);
     if (!files.length) return;
     const status = $("share-status");
     const pick = $("share-pick");
@@ -515,7 +695,6 @@
     }
     if (!hostPassword) {
       status.textContent = "连接密码未就绪，请稍后重试";
-      input.value = "";
       return;
     }
     pick.disabled = true;
@@ -541,7 +720,6 @@
         fail++;
       }
     }
-    input.value = "";
     pick.disabled = false;
     if (ok && !fail) status.textContent = "已上传 " + ok + " 个文件";
     else if (ok && fail) status.textContent = "已上传 " + ok + " 个，失败 " + fail + " 个";
@@ -549,10 +727,93 @@
     refreshFiles();
   }
 
+  // ----------------- 拖拽上传（传输页遮罩） -----------------
+  // 把文件从资源管理器拖到「传输」页即可上传。
+  //   - 监听挂在 window 上（而非某个视图元素）：Tauri v2 需要窗口配置
+  //     dragDropEnabled:false 才会把拖放事件交给 HTML 层，此时事件在 window 上最可靠
+  //   - 进入时显示全页遮罩提示，离开/放下后隐藏
+  //   - 用 dragenter/dragleave 计数抵消子元素冒泡造成的闪烁
+  (function initDropZone() {
+    const view = $("view-devices");
+    const mask = $("drop-mask");
+    if (!view || !mask) return;
+    let depth = 0; // 进入子元素会产生嵌套 enter/leave，用计数判断是否真正离开
+
+    // 只有在「传输」页可见时才接管拖拽，避免影响其它页面
+    const isActive = () => view.classList.contains("active");
+
+    /// 拖拽内容里是否含文件（拖拽文本/链接时不弹遮罩）
+    function hasFiles(e) {
+      const dt = e.dataTransfer;
+      if (!dt) return false;
+      // types 是 DOMStringList / 数组，统一用 Array.from 兼容
+      const types = Array.from(dt.types || []);
+      return types.indexOf("Files") >= 0;
+    }
+
+    function show() {
+      mask.classList.remove("hidden");
+    }
+    function hide() {
+      depth = 0;
+      mask.classList.add("hidden");
+    }
+
+    window.addEventListener("dragenter", (e) => {
+      if (!isActive() || !hasFiles(e)) return;
+      e.preventDefault();
+      depth++;
+      show();
+    });
+
+    // dragover 必须 preventDefault，否则 drop 事件不会触发
+    window.addEventListener("dragover", (e) => {
+      if (!isActive() || !hasFiles(e)) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+    });
+
+    window.addEventListener("dragleave", (e) => {
+      if (!isActive()) return;
+      // 拖到窗口之外才算真正离开（relatedTarget 为空表示离开文档）
+      if (!e.relatedTarget) {
+        hide();
+        return;
+      }
+      depth--;
+      if (depth <= 0) hide();
+    });
+
+    window.addEventListener("drop", (e) => {
+      // 无论是否在传输页，都要阻止浏览器默认的「打开文件」行为
+      e.preventDefault();
+      hide();
+      if (!isActive()) return;
+      const files = Array.from((e.dataTransfer && e.dataTransfer.files) || []);
+      if (files.length) uploadFiles(files);
+    });
+
+    // 视图切走时收起遮罩，避免残留
+    window.addEventListener("lan-view-change", hide);
+  })();
+
   // ----------------- 设置 -----------------
+  /// 「设置已保存」等反馈统一走顶部轻提示，避免用户误以为需要点按钮才生效
+  let savedTimer = null;
+  function flashSaved() {
+    const t = $("settings-save-toast");
+    if (!t) return;
+    t.classList.remove("hidden");
+    if (savedTimer) clearTimeout(savedTimer);
+    savedTimer = setTimeout(() => t.classList.add("hidden"), 1600);
+  }
+
   $("storage-pick").onclick = async () => {
     const p = await safe("pick_dir");
-    if (p) $("storage-input").value = p;
+    if (p) {
+      $("storage-input").value = p;
+      saveSettings();
+    }
   };
   $("storage-open").onclick = () => {
     const p = $("storage-input").value;
@@ -585,7 +846,18 @@
     if (el) el.addEventListener("change", syncCleanupFields);
   });
 
-  $("settings-save").onclick = async () => {
+  let saveTimer = null;
+  /// 防抖保存：连续输入时不反复落盘，停止输入 500ms 后再写
+  function scheduleSave() {
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(saveSettings, 500);
+  }
+
+  async function saveSettings() {
+    if (saveTimer) {
+      clearTimeout(saveTimer);
+      saveTimer = null;
+    }
     const port = parseInt($("set-port").value, 10);
     const password = $("set-pwd").value.trim();
     const storage_dir = $("storage-input").value.trim();
@@ -593,14 +865,26 @@
     const cleanup_max_mb = parseInt($("set-cleanup-max").value, 10);
     const cleanup_days = parseInt($("set-cleanup-days").value, 10);
     const msg = $("settings-msg");
+
+    // 校验不过时不落盘，只在卡片下方说明原因
     if (!/^\d{6}$/.test(password)) {
-      msg.textContent = "密码必须是 6 位数字";
+      msg.textContent = "密码必须是 6 位数字，尚未保存";
+      return;
+    }
+    if (!(port >= 1024 && port <= 65535)) {
+      msg.textContent = "端口需在 1024 - 65535 之间，尚未保存";
       return;
     }
     if (auto_cleanup && (!(cleanup_max_mb > 0) || !(cleanup_days > 0))) {
-      msg.textContent = "容量阈值与保留天数需为大于 0 的整数";
+      msg.textContent = "容量阈值与保留天数需为大于 0 的整数，尚未保存";
       return;
     }
+
+    // 比对基准必须是「刚从后端读回的配置」：启动早期 cfg 还是占位桩，
+    // 直接比对会把「端口注入值 ≠ 真实配置端口」误判成用户修改。
+    if (!cfgLoaded) await loadConfig();
+    const portChanged = cfgLoaded && port !== cfg.port;
+
     try {
       await invoke("save_settings", {
         port,
@@ -611,13 +895,76 @@
         cleanupDays: cleanup_days,
       });
       msg.textContent = "";
-      toast("设置已保存");
+      flashSaved();
       await loadConfig();
+      if (portChanged) {
+        // 后端已热重启到新端口；这里紧跟着把连接切过去，避免面板显示「已停止」
+        toast("端口已生效：" + port);
+        reconnectTo(port);
+      } else {
+        // 端口没变 → 连接不受影响，刷新二维码令牌即可
+        await rotateScanToken();
+      }
       await refreshStatus();
     } catch (e) {
+      // 端口被占用等情况下后端会返回错误，此时连接仍在旧端口上，需回滚输入框
       msg.textContent = typeof e === "string" ? e : "保存失败";
+      if (portChanged) await loadConfig();
     }
-  };
+  }
+
+  /// 端口热切换后重连控制面板 WebSocket。
+  /// 旧连接会因服务重启而断开，这里主动切到新端口并重建连接，
+  /// 否则 ws.onclose 的重试定时器仍会一直连旧端口。
+  function reconnectTo(port) {
+    serverPort = port;
+    wantConnect = true;
+    if (retry) {
+      clearInterval(retry);
+      retry = null;
+    }
+    if (ws) {
+      try { ws.onclose = null; } catch (e) {}
+      try { ws.close(); } catch (e) {}
+      ws = null;
+    }
+    connect();
+  }
+
+  // 输入即保存（防抖）；
+  $("set-port").addEventListener("input", scheduleSave);
+  $("storage-input").addEventListener("input", scheduleSave);
+  // 密码：只在失焦（change）时保存 —— 边输边存会在只输到 3 位时报「必须是 6 位数字」，
+  // 也会让每次按键都触发一次校验失败提示。
+  $("set-pwd").addEventListener("change", scheduleSave);
+  // 勾选 / 数字框：change 时立即保存（含清理字段的启用状态）
+  ["set-cleanup-enabled", "set-cleanup-max", "set-cleanup-days"].forEach((id) => {
+    const el = $(id);
+    if (el) el.addEventListener("change", scheduleSave);
+  });
+
+  // ----------------- 关于 / 版本 -----------------
+  /// 把 Unix 秒格式化为本地时区的可读时间。
+  function fmtBuildTime(epoch) {
+    if (!epoch) return "未知";
+    const d = new Date(epoch * 1000);
+    if (isNaN(d.getTime())) return "未知";
+    const p = (n) => String(n).padStart(2, "0");
+    return (
+      d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) +
+      " " + p(d.getHours()) + ":" + p(d.getMinutes())
+    );
+  }
+
+  /// 读取并展示版本信息（版本号 / 构建时间 / 配置文件与程序路径）。
+  async function loadAppInfo() {
+    const info = await safe("app_info");
+    if (!info) return;
+    if ($("about-version")) $("about-version").textContent = info.version || "—";
+    if ($("about-built")) $("about-built").textContent = fmtBuildTime(info.built_epoch);
+    if ($("about-config")) $("about-config").textContent = info.config_dir || "—";
+    if ($("about-program")) $("about-program").textContent = info.program || "—";
+  }
 
   // ----------------- WebSocket -----------------
   function connect() {
@@ -669,6 +1016,11 @@
         case "toast":
           toast(m.text);
           break;
+        case "port_changed":
+          // 服务已热重启到新端口：把面板连接切过去，并刷新二维码/地址
+          if (m.port && m.port !== serverPort) reconnectTo(m.port);
+          loadConfig();
+          break;
         case "text":
           applyRemoteText(m.value);
           break;
@@ -682,12 +1034,21 @@
   }
 
   // ----------------- 启动 -----------------
-  function init() {
+  async function init() {
     initNav();
     renderPwd();
-    loadConfig();
+    // 先把真实配置读回来（拿到 cfgLoaded 基准 + 真实端口），再连 WebSocket、
+    // 起定时器。否则这一小段窗口期内：定时器/事件可能拿占位 cfg 判定「已修改」，
+    // WebSocket 也可能连到注入的旧端口上。
+    await loadConfig();
+    await rotateScanToken();
     refreshStatus();
     connect();
+    // 防火墙检测开销较大（要拉 PowerShell），放到最后且不 await，
+    // 免得拖慢首屏；检测结果只影响首页那条提示横幅。
+    checkFirewall();
+    // 版本信息（设置页「关于」卡片）：纯本地读取，同样不阻塞首屏
+    loadAppInfo();
     refreshDevices();
     watchTxMinHeight();
     setTimeout(refreshFiles, 800);

@@ -107,6 +107,16 @@
         <div id="conn-msg" class="banner err hidden" style="margin-top: 10px"></div>
       </div>
 
+      <!-- 扫码免密：自动连接中（连接失败时回到上面的连接卡片） -->
+      <div id="auto-card" class="card hidden">
+        <h2>正在连接…</h2>
+        <div class="muted" id="auto-text">通过扫码免密连接中，请稍候。</div>
+        <div id="auto-msg" class="banner err hidden" style="margin-top: 10px"></div>
+        <div class="row hidden" id="auto-fallback" style="margin-top: 12px; justify-content: flex-end">
+          <button id="auto-manual" class="primary">手动输入密码</button>
+        </div>
+      </div>
+
       <!-- 已连接区域 -->
       <div id="main-area" class="hidden">
         <div class="banner">已连接。可发送文件 / 文本，或下载电脑分享的文件。</div>
@@ -158,6 +168,9 @@
         var ws = null, retry = null, connected = false, keepClosed = false;
         var pwd = sessionStorage.getItem("lanshare_pwd") || "";
         var name = sessionStorage.getItem("lanshare_name") || detectName();
+        // 扫码免密令牌：来自二维码 URL 的 ?t=xxx。只在内存里，刷新页面若地址栏仍在则继续有效。
+        var scanToken = new URLSearchParams(location.search).get("t") || "";
+        var autoMode = !!scanToken; // 扫码进入 → 免密自动连接；手动输网址 → 输入密码
 
         var $ = function (id) { return document.getElementById(id); };
         $("pwd").value = pwd;
@@ -187,13 +200,28 @@
           connected = p;
           if (p) {
             $("connect-card").classList.add("hidden");
+            $("auto-card").classList.add("hidden");
             $("main-area").classList.remove("hidden");
             setStatus(true, "已连接");
           } else {
-            $("connect-card").classList.remove("hidden");
+            // 免密模式下连接失败不直接甩出密码框，先给「手动输入密码」入口
             $("main-area").classList.add("hidden");
+            if (autoMode) {
+              $("connect-card").classList.add("hidden");
+              $("auto-card").classList.remove("hidden");
+            } else {
+              $("connect-card").classList.remove("hidden");
+            }
             setStatus(false, "未连接");
           }
+        }
+
+        /// 退出免密模式，切回手动输入密码的界面
+        function leaveAutoMode(reason) {
+          autoMode = false;
+          $("auto-card").classList.add("hidden");
+          $("connect-card").classList.remove("hidden");
+          if (reason) showMsg(reason);
         }
 
         function fmtSize(bytes) {
@@ -242,6 +270,12 @@
 
         function doPair() {
           if (!ws || ws.readyState !== 1) return;
+          if (autoMode) {
+            // 扫码免密：只发令牌，不发密码
+            send({ type: "pair", token: scanToken, name: name });
+            showMsg("");
+            return;
+          }
           pwd = $("pwd").value.trim();
           name = $("name").value.trim() || detectName();
           sessionStorage.setItem("lanshare_pwd", pwd);
@@ -260,6 +294,11 @@
           };
           ws.onclose = function () {
             setConnected(false);
+            // 扫码免密失败（令牌过期/服务重启）没必要反复重连，交给用户决定
+            if (autoMode) {
+              autoFailed("扫码免密已失效，请手动输入密码。");
+              return;
+            }
             if (keepClosed || connected) return;
             if (!retry) retry = setInterval(function () {
               if (!connected && !keepClosed) connect();
@@ -276,11 +315,23 @@
             } else if (m.type === "paired") {
               if (m.ok) {
                 keepClosed = false;
+                autoMode = false; // 配对成功后无需再区分来源
+                // 扫码免密配对时服务端会补发连接密码：文件上传/下载走 HTTP 接口，
+                // 那些接口只认密码不认令牌。不接收的话会出现「文本能同步、传文件失败」。
+                if (m.password) {
+                  pwd = String(m.password);
+                  $("pwd").value = pwd;
+                  try { sessionStorage.setItem("lanshare_pwd", pwd); } catch (e) {}
+                }
                 setConnected(true);
                 refreshFiles();
               } else {
-                showMsg(m.error || "连接失败");
-                setStatus(false, "未连接");
+                if (autoMode) {
+                  autoFailed(m.error || "扫码免密连接失败，请手动输入密码。");
+                } else {
+                  showMsg(m.error || "连接失败");
+                  setStatus(false, "未连接");
+                }
               }
             } else if (m.type === "disconnected") {
               setConnected(false);
@@ -291,9 +342,24 @@
           };
         }
 
+        /// 免密自动连接失败：提示并提供「手动输入密码」入口
+        function autoFailed(text) {
+          setStatus(false, "未连接");
+          $("auto-text").textContent = "扫码免密未能连接。";
+          var el = $("auto-msg");
+          el.textContent = text || "扫码免密已失效，请手动输入密码。";
+          el.classList.remove("hidden");
+          $("auto-fallback").classList.remove("hidden");
+          if (ws) { try { ws.close(); } catch (e) {} ws = null; }
+        }
+
         $("connect").onclick = function () {
           if (ws && ws.readyState === 1) doPair();
           else connect();
+        };
+        $("auto-manual").onclick = function () {
+          leaveAutoMode("请输入连接密码。");
+          connect();
         };
         $("disconnect").onclick = function () {
           keepClosed = true;
@@ -322,7 +388,7 @@
             return arr;
           })();
           if (!files.length) { upMsg("请先选择要上传的文件"); return; }
-          if (!pwd) { upMsg("未获取到连接密码，请重新连接"); return; }
+          if (!pwd) { upMsg("缺少连接密码，请断开后重新连接（扫码连接会自动补齐）"); return; }
           if (!connected) { upMsg("未连接，请先连接"); return; }
           $("upload").disabled = true;
           var total = files.length, done = 0, fail = 0, firstErr = "";
@@ -400,6 +466,13 @@
           try { document.execCommand("copy"); } catch (e) {}
         }
 
+        // 初始界面：扫码进来显示「正在连接」，手动进来显示密码卡片
+        if (autoMode) {
+          $("connect-card").classList.add("hidden");
+          $("auto-card").classList.remove("hidden");
+        } else {
+          $("auto-card").classList.add("hidden");
+        }
         connect();
         setInterval(refreshFiles, 5000);
       })();

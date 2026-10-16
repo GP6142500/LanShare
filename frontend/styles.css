@@ -198,6 +198,142 @@ body {
   pointer-events: none;
 }
 
+/* 设置自动保存的轻提示（右上角，不打断操作） */
+.save-toast {
+  position: fixed;
+  top: 18px;
+  right: 22px;
+  background: var(--text);
+  color: var(--bg);
+  font-size: 12px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  z-index: 60;
+  transition: opacity 0.25s;
+}
+
+.save-toast.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* 拖拽上传遮罩：拖文件到「传输」页时覆盖整窗提示 */.drop-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(79, 70, 229, 0.08);
+  backdrop-filter: blur(2px);
+  /* 遮罩本身不接收鼠标事件，避免干扰其下的拖拽判定 */
+  pointer-events: none;
+}
+
+.drop-mask.hidden {
+  display: none;
+}
+
+.drop-mask-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 36px 52px;
+  border-radius: 16px;
+  border: 2px dashed var(--accent);
+  background: var(--panel);
+  color: var(--accent);
+  box-shadow: 0 16px 40px rgba(16, 24, 40, 0.18);
+  animation: drop-pop 0.16s ease-out;
+}
+
+.drop-mask-title {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.drop-mask-sub {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+@keyframes drop-pop {
+  from {
+    transform: scale(0.96);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* 防火墙未放行提示：橙色告警条，只在检测到可能连不上时出现 */
+.alert {
+  display: flex;
+  gap: 12px;
+  padding: 14px 16px;
+  margin-bottom: 14px;
+  border: 1px solid #f0c78a;
+  border-left: 3px solid #e08a1e;
+  border-radius: var(--radius);
+  background: #fdf7ec;
+  color: var(--text);
+}
+
+@media (prefers-color-scheme: dark) {
+  .alert {
+    background: rgba(224, 138, 30, 0.1);
+    border-color: rgba(224, 138, 30, 0.4);
+  }
+}
+
+.alert.hidden {
+  display: none;
+}
+
+.alert-icon {
+  color: #d97706;
+  flex-shrink: 0;
+  padding-top: 1px;
+}
+
+.alert-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.alert-title {
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 2px;
+}
+
+.alert-text {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.alert-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.alert-msg {
+  font-size: 12px;
+  margin-top: 6px;
+}
+
+button.ghost.sm {
+  font-size: 12px;
+  padding: 2px 8px;
+}
+
 @media (max-width: 760px) {
   .layout {
     flex-direction: column;
@@ -279,6 +415,41 @@ body {
   color: var(--accent);
   border-radius: 8px;
   padding: 4px 10px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.ip-chip:hover {
+  border-color: var(--accent);
+}
+
+.ip-chip.active {
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.copy-url {
+  margin-top: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  color: var(--accent);
+  word-break: break-all;
+}
+
+/* 二维码与其下方的「刷新二维码」小按钮 */
+.qr-side {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* 用 button.ghost 提高特异性，避免被 button.ghost 的 padding 覆盖 */
+button.ghost.qr-refresh {
+  font-size: 12px;
+  padding: 2px 8px;
 }
 
 .qr {
@@ -739,4 +910,22 @@ input[type="number"]:focus {
   color: var(--accent);
   margin-right: 6px;
   vertical-align: 1px;
+}
+
+/* 关于卡片：键值对信息表 */
+.about-grid {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 8px 16px;
+  font-size: 13px;
+  align-items: baseline;
+}
+.about-key {
+  color: var(--muted);
+  white-space: nowrap;
+}
+.about-val {
+  color: var(--text);
+  /* 路径可能很长：允许换行并按需省略，避免撑破卡片 */
+  word-break: break-all;
 }

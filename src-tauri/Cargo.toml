@@ -26,6 +26,10 @@ dirs = "5"
 tower-http = { version = "0.5", features = ["cors"] }
 rand = "0.8"
 rfd = { version = "0.14", features = ["tokio"] }
+# 用 socket2 手动建监听套接字以设置 SO_REUSEADDR：
+# 重启时旧连接处于 TIME_WAIT，若不设该选项，新进程会因端口「被占用」而回退到随机端口，
+# 导致刚重启就又被判定成「端口已修改」。
+socket2 = "0.5"
 
 [features]
 # Default to nothing; Tauri enables what it needs.

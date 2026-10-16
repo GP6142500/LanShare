@@ -73,7 +73,8 @@ struct DeviceConn {
 
 struct ServerRuntime {
     shutdown: oneshot::Sender<()>,
-    #[allow(dead_code)]
+    /// 服务任务句柄。热重启时要 await 它，确认旧监听套接字已真正释放，
+    /// 否则新端口/新配置尚未生效就重新绑定，可能撞上仍被占用的端口。
     handle: tauri::async_runtime::JoinHandle<()>,
 }
 
@@ -88,6 +89,9 @@ struct Inner {
     host: Mutex<Option<ClientSink>>, // 控制面板（主机）WebSocket
     devices: Mutex<HashMap<String, DeviceConn>>, // 已连接（已配对）设备
     shared_text: Mutex<String>,                  // 共享文本框（所有端共用的唯一真相）
+    /// 扫码免密令牌：二维码 URL 携带的短令牌，仅用于「手机扫码后自动填密码」。
+    /// 明文密码绝不进二维码（会被截图/拍照泄露）；令牌可一键失效。
+    scan_token: Mutex<String>,
     runtime: Mutex<Option<ServerRuntime>>,
 }
 
@@ -102,9 +106,36 @@ impl AppState {
                 host: Mutex::new(None),
                 devices: Mutex::new(HashMap::new()),
                 shared_text: Mutex::new(String::new()),
+                scan_token: Mutex::new(gen_scan_token()),
                 runtime: Mutex::new(None),
             }),
         }
+    }
+
+    /// 当前扫码免密令牌
+    pub fn scan_token(&self) -> String {
+        self.inner.scan_token.lock().unwrap().clone()
+    }
+
+    /// 当前连接密码。
+    /// 仅用于「已通过令牌认证的设备」补齐 HTTP 接口所需凭据（见 pair 处理），
+    /// 不要暴露给未认证的请求方 —— /api/config 只在 loopback 返回该字段。
+    pub fn password(&self) -> String {
+        self.inner.cfg.lock().unwrap().password.clone()
+    }
+
+    /// 轮换扫码免密令牌（换密码 / 手动刷新二维码时调用），旧令牌立即失效。
+    pub fn rotate_scan_token(&self) -> String {
+        let t = gen_scan_token();
+        *self.inner.scan_token.lock().unwrap() = t.clone();
+        t
+    }
+
+    /// 校验扫码令牌是否有效（常量时间比较，避免时序侧信道）。
+    /// 令牌为空时视为「扫码免密已关闭」，任何请求都不通过。
+    fn check_scan_token(&self, t: &str) -> bool {
+        let cur = self.inner.scan_token.lock().unwrap().clone();
+        !cur.is_empty() && t.len() == cur.len() && ct_eq(t.as_bytes(), cur.as_bytes())
     }
 
     pub fn config(&self) -> Config {
@@ -214,14 +245,31 @@ impl AppState {
                 .layer(DefaultBodyLimit::max(2 * 1024 * 1024 * 1024))
                 .layer(CorsLayer::permissive())
                 .with_state(st.clone());
-            let addr = SocketAddr::from(([0, 0, 0, 0], port));
-            let listener = match tokio::net::TcpListener::bind(addr).await {
+            // 绑定失败时（端口被占用 / 配置损坏）自动回退到系统分配的可用端口，
+            // 否则界面会陷入「服务启动不了、设置页也改不动」的死角。
+            let listener = match bind_reusable(port) {
                 Ok(l) => l,
                 Err(e) => {
-                    eprintln!("[lanshare] 端口绑定失败 {}: {}", port, e);
-                    return;
+                    eprintln!("[lanshare] 端口 {} 绑定失败（{}），改用系统分配的可用端口", port, e);
+                    match bind_reusable(0) {
+                        Ok(l) => l,
+                        Err(e2) => {
+                            eprintln!("[lanshare] 无法绑定任何端口，服务未启动: {}", e2);
+                            let _ = st.inner.runtime.lock().unwrap().take();
+                            return;
+                        }
+                    }
                 }
             };
+            // 以实际绑定到的端口为准，并回写配置，让界面/二维码显示真实地址
+            let actual = listener.local_addr().map(|a| a.port()).unwrap_or(port);
+            if actual != port {
+                eprintln!("[lanshare] 实际监听端口: {}", actual);
+                let mut cfg = st.inner.cfg.lock().unwrap();
+                cfg.port = actual;
+                save_config(&cfg);
+            }
+            let port = actual;
             eprintln!("[lanshare] 服务已启动: http://0.0.0.0:{}", port);
             let server = axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>());
             let _ = server.with_graceful_shutdown(async { let _ = rx.await; }).await;
@@ -235,14 +283,26 @@ impl AppState {
         Ok(())
     }
 
+    /// 停止服务并等待监听套接字真正释放。
+    /// 只发 shutdown 信号是不够的：axum 的 graceful shutdown 需要几个 tick 才关闭
+    /// listener，紧接着 start() 会撞上「端口仍被占用」。这里 await 任务句柄来确保。
     pub async fn stop(&self) -> Result<(), String> {
         let rt = self.inner.runtime.lock().unwrap().take();
         if let Some(r) = rt {
             let _ = r.shutdown.send(());
+            // 超时兜底：避免个别情况下任务迟迟不结束而卡住调用方
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(3), r.handle).await;
         }
         *self.inner.host.lock().unwrap() = None;
         self.inner.devices.lock().unwrap().clear();
         Ok(())
+    }
+
+    /// 热重启服务：先停（等待端口释放）再起，让端口/配置变更立即生效。
+    /// 仅用于用户在设置里修改端口等场景，不需要重启整个软件。
+    pub async fn restart(&self) -> Result<(), String> {
+        self.stop().await?;
+        self.start().await
     }
 
     pub async fn apply_settings(
@@ -266,11 +326,11 @@ impl AppState {
         if cleanup_days == 0 {
             return Err("保留天数需大于 0".into());
         }
-        let (old_port, old_pwd, old_dir, new_dir) = {
+        let (old_pwd, old_dir, new_dir, old_port, new_port) = {
             let mut cfg = self.inner.cfg.lock().unwrap();
-            let old_port = cfg.port;
             let old_pwd = cfg.password.clone();
             let old_dir = cfg.storage_dir.clone();
+            let old_port = cfg.port;
             cfg.port = port;
             cfg.password = password.clone();
             cfg.auto_cleanup = auto_cleanup;
@@ -286,7 +346,7 @@ impl AppState {
             }
             let new_dir = cfg.storage_dir.clone();
             save_config(&cfg);
-            (old_port, old_pwd, old_dir, new_dir)
+            (old_pwd, old_dir, new_dir, old_port, port)
         };
 
         // 接收目录变更：把已有文件迁移到新目录（移动而非丢弃）
@@ -314,15 +374,49 @@ impl AppState {
         if password != old_pwd {
             notify_host(self, &json!({ "type": "password_updated", "password": password }));
         }
-        if port != old_port {
-            self.stop().await?;
-            self.start().await?;
+
+        // 端口变更立即热重启：停掉旧监听、按新端口重新绑定，无需重启整个软件。
+        // 已在进行的传输会短暂中断（旧连接断开），前端会按新端口重连。
+        if new_port != old_port {
+            self.restart().await?;
+            // 重启后以「实际监听端口」为准通知前端：若新端口被占用而回退，
+            // cfg.port 已被 start() 改写为回退值，这里必须报真实值，
+            // 否则前端会拿一个不存在的端口去重连。
+            let actual = self.config().port;
+            notify_host(self, &json!({ "type": "port_changed", "port": actual }));
         }
         Ok(())
     }
 }
 
-fn config_dir() -> PathBuf {
+/// 建立一个绑定了 `SO_REUSEADDR` 的监听套接字，再交给 tokio 托管。
+///
+/// 为什么不用 `tokio::net::TcpListener::bind`：Windows 下它默认不设 SO_REUSEADDR，
+/// 重启软件时旧进程的监听端口可能仍在 TIME_WAIT，新进程会绑定失败 → 触发端口回退
+/// → 配置端口被改写 → 界面又提示「端口已修改，重启后生效」。设上该选项后，
+/// 同一端口可在旧连接残留时立即复用，重启即恢复原端口。
+fn bind_reusable(port: u16) -> std::io::Result<tokio::net::TcpListener> {
+    use socket2::{Domain, Protocol, Socket, Type};
+    let addr: SocketAddr = SocketAddr::from(([0, 0, 0, 0], port));
+    let sock = Socket::new(Domain::for_address(addr), Type::STREAM, Some(Protocol::TCP))?;
+    // Windows 上 SO_REUSEADDR 语义接近 Unix 的 SO_REUSEPORT，允许多个套接字绑同一端口，
+    // 这正是重启「抢回」自己端口所需；监听场景下由后续 accept 正常分流。
+    sock.set_reuse_address(true)?;
+    sock.bind(&addr.into())?;
+    sock.listen(1024)?;
+    sock.set_nonblocking(true)?;
+    tokio::net::TcpListener::from_std(sock.into())
+}
+
+/// 配置目录（`%APPDATA%\lanshare`，或测试用的 `LANSHARE_CONFIG_DIR`）。
+pub fn config_dir() -> PathBuf {
+    // LANSHARE_CONFIG_DIR 仅用于自动化测试：把配置目录指到临时目录，
+    // 既让测试用上独立端口，又完全不碰用户真实配置。生产环境不设置此变量。
+    if let Ok(d) = std::env::var("LANSHARE_CONFIG_DIR") {
+        if !d.trim().is_empty() {
+            return PathBuf::from(d);
+        }
+    }
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("lanshare")
@@ -388,6 +482,56 @@ mod tests {
         assert!(!should_migrate_storage(StdPath::new(r"D:\Downloads"), Some(dl)));
         // no download dir known -> never migrate
         assert!(!should_migrate_storage(StdPath::new(r"C:\Users\Tom\Downloads"), None));
+    }
+
+    // ---------------- 扫码免密令牌 ----------------
+
+    #[test]
+    fn scan_token_is_16_hex_chars_and_unique() {
+        let a = gen_scan_token();
+        let b = gen_scan_token();
+        assert_eq!(a.len(), 16);
+        assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_ne!(a, b, "两次生成的令牌不应相同");
+    }
+
+    #[test]
+    fn ct_eq_matches_ordinary_equality() {
+        assert!(ct_eq(b"abc123", b"abc123"));
+        assert!(!ct_eq(b"abc123", b"abc124"));
+        assert!(!ct_eq(b"abc", b"abcd"), "长度不同必须为假");
+        assert!(ct_eq(b"", b""), "空串等于空串");
+    }
+
+    #[test]
+    fn scan_url_carries_token_so_scanning_needs_no_password() {
+        let u = build_scan_url("192.168.2.7", 18765, "a1b2c3d4e5f60718");
+        assert_eq!(u, "http://192.168.2.7:18765/?t=a1b2c3d4e5f60718");
+    }
+
+    #[test]
+    fn scan_url_has_no_token_param_when_token_empty() {
+        let u = build_scan_url("192.168.2.7", 18765, "");
+        assert_eq!(u, "http://192.168.2.7:18765");
+        assert!(!u.contains('?'), "无令牌时不应出现查询串");
+    }
+
+    // ---------------- IP 优先级（多网卡选对地址）----------------
+
+    #[test]
+    fn ip_rank_prefers_lan_over_virtual_adapters() {
+        // 真实局域网（192.168 / 10.x）优先于 Windows 热点 / WSL / Docker 的 172.x
+        assert!(ip_rank("192.168.2.10") < ip_rank("172.20.96.1"));
+        assert!(ip_rank("10.0.0.5") < ip_rank("172.22.240.1"));
+        assert!(ip_rank("172.16.0.1") < ip_rank("8.8.8.8"));
+    }
+
+    #[test]
+    fn ip_rank_splits_172_private_range_correctly() {
+        assert_eq!(ip_rank("172.16.0.1"), 2, "172.16 属于私网");
+        assert_eq!(ip_rank("172.31.255.254"), 2, "172.31 属于私网");
+        assert_eq!(ip_rank("172.15.0.1"), 3, "172.15 不在私网段");
+        assert_eq!(ip_rank("172.32.0.1"), 3, "172.32 不在私网段");
     }
 
     // ---------------- 自动清理 ----------------
@@ -679,6 +823,27 @@ fn gen_password() -> String {
     format!("{}", rng.gen_range(100000..1000000))
 }
 
+/// 生成扫码免密令牌：16 字节随机数取前 8 字节的十六进制（16 个字符）。
+/// 只放进二维码 URL，不落盘、不写日志，进程重启即换新。
+fn gen_scan_token() -> String {
+    use rand::RngCore;
+    let mut b = [0u8; 8];
+    rand::thread_rng().fill_bytes(&mut b);
+    b.iter().map(|x| format!("{:02x}", x)).collect()
+}
+
+/// 常量时间字节比较：不因首个不同字节的位置而提前返回，避免时序攻击。
+fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for i in 0..a.len() {
+        diff |= a[i] ^ b[i];
+    }
+    diff == 0
+}
+
 fn default_auto_cleanup() -> bool {
     true
 }
@@ -695,6 +860,12 @@ fn load_config() -> Config {
         if let Ok(mut c) = serde_json::from_str::<Config>(&s) {
             if c.password.is_empty() {
                 c.password = gen_password();
+            }
+            // 清洗损坏字段：端口越界（含 0）会让服务绑不上端口，
+            // 直接落回默认值，避免界面陷入「起不来也改不动」的死角。
+            if c.port < 1024 {
+                c.port = 18765;
+                save_config(&c);
             }
             // 迁移：早期版本把接收目录存成 <Downloads> 根目录（而非 <Downloads>\LanShare）。
             // 仅当该目录正是「本机默认下载目录本身」时才迁移，避免误伤用户自定义路径。
@@ -731,16 +902,65 @@ pub fn lan_ips() -> Vec<String> {
     for i in get_if_addrs::getifaddrs() {
         if let IfIpAddr::V4(v4) = i.addr {
             let s = v4.to_string();
-            if s.starts_with("127.") {
+            // 排除回环与 169.254.x.x（APIPA，未拿到 DHCP 的无效地址）
+            if s.starts_with("127.") || s.starts_with("169.254.") {
                 continue;
             }
             v.push(s);
         }
     }
+    // 默认路由出口排最前（手机扫码就该连这个），其余按私网优先级排序
+    let primary = default_route_ip();
+    v.sort_by_key(|s| {
+        if Some(s.as_str()) == primary.as_deref() {
+            0
+        } else {
+            ip_rank(s)
+        }
+    });
     v
 }
 
+/// 探测默认路由出口 IP：向外部地址做 UDP connect（不发送任何数据包，仅查询本机路由表），
+/// 由操作系统选出真正用于上网的网卡。离线 / 无默认路由时返回 None。
+fn default_route_ip() -> Option<String> {
+    let sock = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    sock.connect("8.8.8.8:80").ok()?;
+    let local = sock.local_addr().ok()?;
+    let ip = local.ip().to_string();
+    if ip_rank(&ip) < 3 {
+        Some(ip)
+    } else {
+        None
+    }
+}
+
+/// IP 优先级：1 = 192.168/10. 开头（典型家用/办公局域网）；
+/// 2 = 172.16-31（Windows 热点 / WSL / Docker 虚拟网卡常用）；3 = 其他。
+fn ip_rank(s: &str) -> u8 {
+    if s.starts_with("192.168.") || s.starts_with("10.") {
+        1
+    } else if s.starts_with("172.") {
+        // 172.16.0.0/12 —— 第二段（不是第三段）落在 16..=31
+        let second: u32 = s
+            .split('.')
+            .nth(1)
+            .and_then(|x| x.parse().ok())
+            .unwrap_or(0);
+        if (16..=31).contains(&second) {
+            2
+        } else {
+            3
+        }
+    } else {
+        3
+    }
+}
+
 pub fn primary_lan_ip() -> Option<String> {
+    if let Some(ip) = default_route_ip() {
+        return Some(ip);
+    }
     lan_ips().into_iter().next()
 }
 
@@ -1162,23 +1382,61 @@ async fn serve_client() -> Html<&'static str> {
     Html(include_str!("../web/client.html"))
 }
 
-async fn api_config(State(st): State<AppState>) -> impl IntoResponse {
+async fn api_config(
+    State(st): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+) -> impl IntoResponse {
     let cfg = st.inner.cfg.lock().unwrap();
     let ips = lan_ips();
     let primary = ips.first().cloned().unwrap_or_default();
     let client_url = format!("http://{}:{}", primary, cfg.port);
+    // 扫码免密令牌只回给本机控制面板（loopback），绝不泄露给局域网设备。
+    let scan_token = if addr.ip().is_loopback() {
+        st.scan_token()
+    } else {
+        String::new()
+    };
     Json(json!({
         "port": cfg.port,
         "lan_ips": ips,
         "storage_dir": cfg.storage_dir.to_string_lossy(),
-        "client_url": client_url
+        "client_url": client_url,
+        "scan_token": scan_token
     }))
 }
 
-async fn qr(State(st): State<AppState>) -> impl IntoResponse {
-    let primary = primary_lan_ip().unwrap_or_default();
+/// 组装二维码里编码的扫码 URL。带 `?t=<token>` 时手机扫码可免密自动连接；
+/// token 为空（例如免密关闭）则退化为纯地址，扫码后仍需手输密码。
+fn build_scan_url(ip: &str, port: u16, token: &str) -> String {
+    if token.is_empty() {
+        format!("http://{}:{}", ip, port)
+    } else {
+        format!("http://{}:{}/?t={}", ip, port, token)
+    }
+}
+
+async fn qr(
+    State(st): State<AppState>,
+    Query(q): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
     let port = st.inner.cfg.lock().unwrap().port;
-    let url = format!("http://{}:{}", primary, port);
+    // 允许本机面板指定二维码内容为某个具体网卡地址（多网卡时手动切换）；
+    // 指定的 IP 必须在真实网卡列表里，防止任意 URL 注入。
+    let primary = match q.get("ip") {
+        Some(ip) => {
+            let valid = lan_ips().iter().any(|a| a == ip);
+            if valid {
+                ip.clone()
+            } else {
+                primary_lan_ip().unwrap_or_default()
+            }
+        }
+        None => primary_lan_ip().unwrap_or_default(),
+    };
+    // 二维码内容带扫码免密令牌：手机扫码打开即自动连接、无需手输密码。
+    // 手动在浏览器敲地址（不带 token）仍走「输入密码」流程。
+    let token = st.scan_token();
+    let url = build_scan_url(&primary, port, &token);
     let code = match qrcode::QrCode::new(url.as_bytes()) {
         Ok(c) => c,
         Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "qr error").into_response(),
@@ -1261,6 +1519,10 @@ async fn upload(
 ) -> impl IntoResponse {
     let pwd = q.get("pwd").cloned().unwrap_or_default();
     if !check_password(&st, &pwd) {
+        // 先把请求体排干再回 403：release 版响应极快，若立刻断连，
+        // 客户端可能还在写 body 而收到 ECONNABORTED 而非 403。
+        // 排干受 DefaultBodyLimit 限制，不会无限读。
+        while let Ok(Some(_)) = multipart.next_field().await {}
         return (StatusCode::FORBIDDEN, "forbidden").into_response();
     }
     let uploader = q.get("name").cloned().unwrap_or_else(|| "设备".into());
@@ -1460,12 +1722,15 @@ async fn handle_ws_message(
     match typ {
         "pair" if role != "host" => {
             let pwd = v.get("password").and_then(|x| x.as_str()).unwrap_or("");
+            let token = v.get("token").and_then(|x| x.as_str()).unwrap_or("");
             let name = v
                 .get("name")
                 .and_then(|x| x.as_str())
                 .unwrap_or("我的设备")
                 .to_string();
-            let ok = check_password(st, pwd);
+            // 凭据二选一：扫码令牌（手机扫码免密）或明文密码（手动输网址）
+            let via_token = st.check_scan_token(token);
+            let ok = via_token || check_password(st, pwd);
             if ok {
                 let id = uuid::Uuid::new_v4().to_string();
                 let now = now_secs();
@@ -1477,10 +1742,20 @@ async fn handle_ws_message(
                         connected_at: now,
                     },
                 );
-                let _ = tx.send(
-                    json!({ "type": "paired", "ok": true, "id": id.clone(), "name": name.clone() })
-                        .to_string(),
-                );
+                // 扫码免密配对时把连接密码一并下发：文件上传/下载走的是 HTTP 接口，
+                // 那些接口只认密码、不认令牌（令牌只用于 WebSocket 配对）。
+                // 设备已凭令牌通过认证，此时告知密码不扩大信任面，否则扫码连接后
+                // 文本同步正常、但传文件会因缺少密码而失败。
+                let mut payload = json!({
+                    "type": "paired", "ok": true,
+                    "id": id.clone(), "name": name.clone()
+                });
+                if via_token {
+                    if let Some(p) = payload.as_object_mut() {
+                        p.insert("password".into(), json!(st.password()));
+                    }
+                }
+                let _ = tx.send(payload.to_string());
                 *device_id = Some(id);
                 broadcast_devices(st);
                 notify_host(st, &json!({ "type": "toast", "text": format!("{} 已连接", name) }));
