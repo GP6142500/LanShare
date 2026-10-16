@@ -3,6 +3,7 @@ name = "lanshare"
 version = "0.1.0"
 description = "局域网文件与文本互传"
 authors = ["高鹏"]
+license = "MIT"
 edition = "2021"
 rust-version = "1.77"
 

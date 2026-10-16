@@ -86,11 +86,11 @@ lanshare/
     ├── panel.js
     └── styles.css
 
-scripts/
-└── release.sh            # 通过 GitHub API 发布 Release（需 GITHUB_TOKEN）
-
+LICENSE                   # MIT 许可证
 e2e_*.mjs                 # 端到端测试脚本（Node，无需额外依赖）
 verify_mask.html          # 拖拽遮罩的浏览器渲染验证页
+
+# 不入库：scripts/release.sh（本地发版脚本）、.github-token（发版令牌）
 ```
 
 ## 构建与运行
@@ -133,19 +133,35 @@ src-tauri/target/release/bundle/nsis/LanShare_<版本>_x64-setup.exe
 4. 把 `LanShare_0.1.0_x64-setup.exe` 拖进 **Attach binaries** 区域
 5. 点 **Publish release**
 
-### 方式二：脚本上传（可重复、适合自动化）
+### 方式二：脚本上传（本地脚本，不入库）
+
+> `scripts/release.sh` 是**本地便利脚本，未纳入版本控制**（见 `.gitignore`）。克隆本仓库的人拿不到它，请走方式一，或按下方说明自行实现。该脚本的用法注释写在文件头部。
 
 需要先生成一个 Personal Access Token（classic 勾 `repo`；fine-grained 勾 `Contents: Read and write`）：
 
 <https://github.com/settings/tokens>
 
+推荐把 token 写进项目根目录的 `.github-token`（已在 `.gitignore` 中忽略，不会入库，也不会留进 shell 历史）：
+
 ```bash
-export GITHUB_TOKEN=ghp_xxxxxxxx          # 仅用于 API 调用，不写入 git config
+echo ghp_xxxxxxxx > .github-token
 bash scripts/release.sh                    # 版本号自动从 tauri.conf.json 读取
 bash scripts/release.sh 0.2.0 --draft      # 或指定版本 + 存为草稿
 ```
 
-脚本会创建（或复用已存在的）tag、上传安装包，最后打印下载地址与 Release 页面链接。
+也支持环境变量 `GITHUB_TOKEN` / `GH_TOKEN`（优先于 `.github-token`）。
+
+脚本行为：
+
+- 调用前先自检 token（`GET /repos/:owner/:repo` 返回 200 才继续），权限不足会直接告诉你原因
+- 创建 Release；若 tag 已存在则自动复用，不会重复建
+- 上传前**按文件名精确匹配并删除同名旧资产**，所以同一个版本可以反复执行
+- 最后打印资产的 `browser_download_url` 与 Release 页面链接
+
+> 说明：脚本**不会**尝试从 git 凭据助手借用 token。GCM 在凭据库为空时会弹出图形授权窗口等待登录，在无终端环境里会永久挂起；宁可明确报错也不卡住。
+
+> **注意**：创建 Release 与上传安装包是**两步**。只完成第一步会得到一个 `assets = 0` 的空 Release——Release 页面上看不到 setup.exe，就是这个原因。
+
 发布前记得先把 `src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`package.json` 三处版本号改成一致。
 
 ## 端到端测试
@@ -189,3 +205,13 @@ node e2e_drop_mask_render.mjs     "file:///.../verify_mask.html"
 - **安全**：6 位连接密码阻止同网段误蹭；明文 HTTP 仅在可信局域网内使用，敏感场景建议后续启用 HTTPS。
 - **接收目录中的其他文件**：历史页会扫描接收目录下的**所有**文件。直接放在根目录的文件会归为「未知」来源，因此建议不要往该目录另存无关文件。
 - **打包**：`--bundles nsis` 生成 `.exe` 安装包；若要 `msi` 需先安装 WiX 运行时。
+
+## 许可证
+
+本项目采用 [MIT 许可证](LICENSE) 开源。
+
+```
+Copyright (c) 2026 高鹏
+```
+
+你可以自由使用、修改、商用与再分发，只需保留版权声明与许可证原文。

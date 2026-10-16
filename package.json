@@ -2,6 +2,7 @@
   "name": "lanshare",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "description": "局域网文件与文本互传（Tauri 2 + Rust）",
   "scripts": {
     "dev": "tauri dev",

@@ -16,3 +16,9 @@ Thumbs.db
 # E2E 测试生成的截图（*-preview.png），只作本地人工核对用，不入库
 # 注意：不要用宽泛的 *.png，src-tauri/icons/*.png 是必须提交的应用图标
 *-preview.png
+
+# 发版用的 GitHub token（scripts/release.sh 会读取），绝对不能入库
+.github-token
+
+# 本地发版脚本：仅本机用，不入库（已提交过，故同时需要 git rm --cached 取消跟踪）
+scripts/release.sh
