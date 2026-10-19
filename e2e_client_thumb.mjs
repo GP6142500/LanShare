@@ -225,6 +225,25 @@ async function main() {
     (await upload("海边.png", makePng(600, 400))) && (await upload("说明.txt", Buffer.from("hello")))
   );
 
+  // 上传即预热：后台线程应已把 320px 基准缓存生成好（打开列表时就是缓存命中）
+  const filesRes = await (await fetch(`${BASE}/api/files?pwd=${PWD}`)).json();
+  const imgFile = (filesRes.files || []).find((f) => f.name === "海边.png");
+  let warmed = null;
+  for (let i = 0; i < 30; i++) {
+    const dir = path.join(CFG, "thumbs");
+    const hit = fs.existsSync(dir)
+      ? fs.readdirSync(dir).find((n) => imgFile && n.startsWith(imgFile.id + "-") && n.endsWith("-320.jpg"))
+      : null;
+    if (hit) {
+      warmed = hit;
+      break;
+    }
+    await sleep(100);
+  }
+  ok("上传后后台预热出 320px 基准缓存", !!warmed, warmed || "3 秒内未出现");
+  ok("非图片不预热（thumbs 目录里只有 1 个文件）",
+     fs.readdirSync(path.join(CFG, "thumbs")).filter((n) => n.endsWith(".jpg")).length === 1);
+
   // ---------- 启动 Edge 并连接 CDP ----------
   const edge = spawn(
     EDGE,
@@ -359,14 +378,14 @@ async function main() {
   ok("图片行使用 <img> 缩略图", !!(imgRow && imgRow.hasImg && !imgRow.badge), JSON.stringify(imgRow));
   ok("缩略图地址走 /api/thumb/", !!(imgRow && /\/api\/thumb\//.test(imgRow.src)), imgRow && imgRow.src);
   ok(
-    "缩略图地址带密码与版本号",
-    !!(imgRow && /pwd=[^&]+&v=\d+/.test(imgRow.src)),
+    "缩略图地址带密码、w=160 与版本号",
+    !!(imgRow && /pwd=[^&]+&w=160&v=\d+/.test(imgRow.src)),
     imgRow && imgRow.src
   );
   ok("缩略图真的加载成功（naturalWidth>0）", !!(imgRow && imgRow.loaded && imgRow.nw > 0), JSON.stringify(imgRow));
   ok(
-    "缩略图按 320px 长边缩放（600x400 → 320x213）",
-    !!(imgRow && imgRow.nw === 320 && Math.abs(imgRow.nh - 213) <= 1),
+    "列表行只要 160px（600x400 → 160x107），不传 320px",
+    !!(imgRow && imgRow.nw === 160 && Math.abs(imgRow.nh - 107) <= 1),
     imgRow && `${imgRow.nw}x${imgRow.nh}`
   );
   ok("缩略图容器为 44x44", !!(imgRow && imgRow.tw === 44 && imgRow.th === 44), imgRow && `${imgRow.tw}x${imgRow.th}`);
@@ -377,6 +396,25 @@ async function main() {
     !!(imgRow && /手机 · \d/.test(imgRow.sub) && txtRow && /手机 · \d/.test(txtRow.sub)),
     `${imgRow && imgRow.sub} | ${txtRow && txtRow.sub}`
   );
+
+  // 5 秒轮询不应重建 DOM：给当前 <img> 打标记，等过一个轮询周期后它必须还在。
+  // 无条件 innerHTML="" 重建会让缩略图反复销毁重建（闪烁 + 重复解码）。
+  await evalJs(
+    `(function(){var i=document.querySelector("#files .thumb img"); if(i) i.setAttribute("data-probe","1"); return true;})()`
+  );
+  await sleep(6000);
+  const survived = await evalJs(`!!document.querySelector('#files .thumb img[data-probe="1"]')`);
+  ok("5 秒轮询未重建列表（img 元素存活）", survived === true);
+
+  // 但列表真的变化时必须重建
+  await upload("补充.txt", Buffer.from("another"));
+  let grew = false;
+  for (let i = 0; i < 30; i++) {
+    const n = await evalJs(`document.querySelectorAll("#files .item").length`);
+    if (n === 3) { grew = true; break; }
+    await sleep(300);
+  }
+  ok("新增文件后列表会重建（3 行）", grew);
 
   // 截图存档，便于人工核对
   const shot = await send("Page.captureScreenshot", { format: "png" });

@@ -654,6 +654,16 @@
     const build = viewMode === "grid" ? buildFileCard : buildFileRow;
     fs.forEach((f) => box.appendChild(build(f, { showUploader: false })));
   }
+  // 文件列表签名：内容没变就不重建 DOM。
+  // 4 秒轮询若无条件重建，网格视图里所有 <img> 会被销毁再创建 ——
+  // 缩略图反复闪烁、滚动时出现白块，明明数据一点没变。
+  let lastFilesSig = "";
+  function filesSig(a, b) {
+    const one = (list) =>
+      list.map((f) => f.id + ":" + (f.mtime || 0) + ":" + f.size).join(",");
+    return one(a || []) + "#" + one(b || []);
+  }
+
   async function refreshFiles() {
     if (!hostPassword) {
       const c = await safe("get_config");
@@ -666,6 +676,9 @@
         const d = await r.json();
         sessionFiles = d.files || [];
         historyFiles = d.history || d.files || [];
+        const sig = filesSig(sessionFiles, historyFiles);
+        if (sig === lastFilesSig) return;
+        lastFilesSig = sig;
         renderFiles(sessionFiles);
         renderHistory();
       }

@@ -2,8 +2,9 @@
 //!
 //! 设计要点：
 //!
-//! - **只为主机面板服务**。生成的图给控制面板的网格视图用；设备端仍只走
-//!   `/api/files`（不带 path），不会请求缩略图。
+//! - **主机面板与手机端共用**：控制面板走 320px（网格卡片），手机列表行只要 160px，
+//!   由 `/api/thumb/:id?w=` 决定；两者都先落到 320px 基准缓存再降采样。
+//! - **上传即预热**：上传完成后把生成任务排进后台单线程队列，打开列表时基本全是缓存命中。
 //! - **同步且吃 CPU**：`generate()` 内部是纯同步的解码 + 缩放 + 编码，
 //!   调用方必须放进 `spawn_blocking`，否则会卡住 tokio 工作线程。
 //! - **缓存文件名带 mtime**：`<id>-<mtime>-<size>.jpg`。源文件被覆盖后
@@ -54,8 +55,7 @@ pub fn cache_path(dir: &Path, id: &str, mtime: i64, size: u32) -> PathBuf {
 ///
 /// 失败（格式不支持、文件损坏、图太大、IO 错误）统一返回 `None`，
 /// 由调用方转成 404，前端据此显示类型徽章 —— 缩略图失败不该是个错误弹窗。
-pub fn generate(src: &Path, size: u32) -> Option<Vec<u8>> {
-    let reader = image::ImageReader::open(src)
+pub fn generate(src: &Path, size: u32) -> Option<Vec<u8>> {    let reader = image::ImageReader::open(src)
         .ok()?
         .with_guessed_format()
         .ok()?;
@@ -98,7 +98,106 @@ pub fn generate(src: &Path, size: u32) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// 取一张指定宽度的缩略图，负责「缓存 → 降采样」的完整链路。
+///
+/// 策略：
+/// 1. 目标宽度的缓存存在 → 直接返回；
+/// 2. 否则确保 320px 基准缓存存在（不存在就解码原图生成）；
+/// 3. 目标宽度 < 320 → 从基准缓存降采样。解码一张 320px JPEG 约 2ms，
+///    而解码一张 12MP 原图要 80~300ms —— 手机列表行要 160px 时这个差别很明显。
+///
+/// 同步 CPU 密集，调用方必须放进 `spawn_blocking`。
+pub fn ensure(dir: &Path, src: &Path, id: &str, mtime: i64, want: u32) -> Option<Vec<u8>> {
+    if want >= THUMB_SIZE {
+        return Some(base_bytes(dir, src, id, mtime)?);
+    }
+
+    let target = cache_path(dir, id, mtime, want);
+    if let Ok(b) = std::fs::read(&target) {
+        return Some(b);
+    }
+    let base = base_bytes(dir, src, id, mtime)?;
+    let small = shrink(&base, want)?;
+    // 写失败不影响本次返回
+    let _ = std::fs::create_dir_all(dir);
+    let _ = std::fs::write(&target, &small);
+    Some(small)
+}
+
+/// 320px 基准缓存：有则读，无则生成并落盘。
+fn base_bytes(dir: &Path, src: &Path, id: &str, mtime: i64) -> Option<Vec<u8>> {
+    let base = cache_path(dir, id, mtime, THUMB_SIZE);
+    if let Ok(b) = std::fs::read(&base) {
+        return Some(b);
+    }
+    let bytes = generate(src, THUMB_SIZE)?;
+    let _ = std::fs::create_dir_all(dir);
+    let _ = std::fs::write(&base, &bytes);
+    Some(bytes)
+}
+
+/// 把已有的 320px JPEG 缩到 `size` 以内（只缩不放）。
+fn shrink(jpeg: &[u8], size: u32) -> Option<Vec<u8>> {
+    let img = image::load_from_memory_with_format(jpeg, image::ImageFormat::Jpeg).ok()?;
+    let small = if img.width() <= size && img.height() <= size {
+        img
+    } else {
+        img.thumbnail(size, size)
+    };
+    let rgb = small.to_rgb8();
+    let mut out = Vec::new();
+    let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 80);
+    enc.encode_image(&rgb).ok()?;
+    Some(out)
+}
+
+// ---------------------------- 上传即预热 ----------------------------
+// 打开列表时每张图都现场解码，会让人感觉「缩略图慢慢冒出来」。
+// 上传完成时把生成任务丢进后台队列，等用户打开列表时缓存已经就绪。
+// 用**单线程串行**而不是并发：一次上传 50 张照片时，50 个并发解码会把
+// CPU 打满（反而拖慢上传响应），串行 54ms/张 在后台完全够用。
+
+struct WarmJob {
+    src: PathBuf,
+    cache: PathBuf,
+}
+
+static WARM_TX: std::sync::OnceLock<std::sync::mpsc::Sender<WarmJob>> = std::sync::OnceLock::new();
+
+fn warm_queue() -> &'static std::sync::mpsc::Sender<WarmJob> {
+    WARM_TX.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<WarmJob>();
+        // 线程创建失败也不致命：tx 还在，任务只会堆积不被消费，不影响主流程
+        let _ = std::thread::Builder::new()
+            .name("lanshare-thumb".into())
+            .spawn(move || {
+                for job in rx {
+                    // 可能已被在线请求生成过，重复时直接跳过
+                    if job.cache.exists() {
+                        continue;
+                    }
+                    if let Some(parent) = job.cache.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    if let Some(bytes) = generate(&job.src, THUMB_SIZE) {
+                        let _ = std::fs::write(&job.cache, bytes);
+                    }
+                }
+            });
+        tx
+    })
+}
+
+/// 把某个文件的缩略图生成排进后台队列（不阻塞调用方）。
+pub fn warm(dir: &Path, src: &Path, id: &str, mtime: i64) {
+    let _ = warm_queue().send(WarmJob {
+        src: src.to_path_buf(),
+        cache: cache_path(dir, id, mtime, THUMB_SIZE),
+    });
+}
+
 /// 删除某个文件 id 的全部缓存（文件名以 `<id>-` 开头）。
+
 /// 删除源文件时调用，避免缓存越积越多。
 pub fn remove_for(dir: &Path, id: &str) -> usize {
     let Ok(rd) = std::fs::read_dir(dir) else {
@@ -249,8 +348,58 @@ mod tests {
     }
 
     #[test]
-    fn remove_for_only_touches_matching_id() {
-        let dir = std::env::temp_dir().join("lanshare-thumb-rm");
+    fn ensure_writes_base_and_small_variant() {
+        // 手机列表行只要 160px：应当先落 320 基准缓存，再降采样出 160 的一档
+        let dir = std::env::temp_dir().join("lanshare-thumb-ensure");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let src = dir.join("big.png");
+        let img = image::RgbaImage::from_pixel(800, 600, image::Rgba([30, 140, 200, 255]));
+        image::DynamicImage::ImageRgba8(img).save(&src).unwrap();
+
+        let small = ensure(&dir, &src, "id1", 123, 160).expect("应能生成 160px");
+        let dim = image::ImageReader::new(std::io::Cursor::new(&small))
+            .with_guessed_format()
+            .unwrap()
+            .into_dimensions()
+            .unwrap();
+        assert_eq!(dim, (160, 120), "800x600 缩到 160 应为 160x120");
+
+        assert!(cache_path(&dir, "id1", 123, THUMB_SIZE).exists(), "应落 320 基准缓存");
+        assert!(cache_path(&dir, "id1", 123, 160).exists(), "应落 160 缓存");
+
+        // 再来一次：命中缓存，内容一致
+        let again = ensure(&dir, &src, "id1", 123, 160).unwrap();
+        assert_eq!(again, small, "第二次应从缓存返回同样的字节");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ensure_default_size_returns_base_without_small_variant() {
+        let dir = std::env::temp_dir().join("lanshare-thumb-ensure2");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let src = dir.join("p.png");
+        let img = image::RgbaImage::from_pixel(400, 400, image::Rgba([200, 60, 60, 255]));
+        image::DynamicImage::ImageRgba8(img).save(&src).unwrap();
+
+        let bytes = ensure(&dir, &src, "id2", 7, THUMB_SIZE).expect("应能生成 320px");
+        assert_eq!(&bytes[..3], &[0xFF, 0xD8, 0xFF]);
+        assert!(cache_path(&dir, "id2", 7, THUMB_SIZE).exists());
+        // 只要 320 时不该额外产生别的尺寸
+        let n = std::fs::read_dir(&dir).unwrap().filter(|e| {
+            e.as_ref().map(|x| x.file_name().to_string_lossy().ends_with(".jpg")).unwrap_or(false)
+        }).count();
+        assert_eq!(n, 1, "不应生成多余尺寸的缓存");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn remove_for_only_touches_matching_id() {        let dir = std::env::temp_dir().join("lanshare-thumb-rm");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("abc-1-320.jpg"), b"x").unwrap();

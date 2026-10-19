@@ -248,19 +248,31 @@
           b.textContent = ext ? ext.toUpperCase().slice(0, 4) : "FILE";
           return b;
         }
-        // 缩略图地址与下载地址同源同鉴权：都走 pwd，不需要额外令牌
+        // 缩略图地址与下载地址同源同鉴权：都走 pwd，不需要额外令牌。
+        // w=160：列表行只有 44 CSS px（3x 屏也才 132 设备像素），传 320px 的图纯属浪费，
+        // 手机 Wi-Fi 上每张能省下 3~4 倍字节。
         function thumbUrl(f) {
           return base + "/api/thumb/" + f.id + "?pwd=" + encodeURIComponent(pwd) +
-            "&v=" + (f.mtime || f.created || 0);
+            "&w=160&v=" + (f.mtime || f.created || 0);
+        }
+        // 列表签名：内容没变就不重建 DOM。
+        // 5 秒轮询若无条件 innerHTML="" 重建，所有 <img> 会被销毁重建，
+        // 手机端表现为缩略图反复闪烁、滚动时白块 —— 明明数据一点没变。
+        var lastSig = "";
+        function filesSig(fs) {
+          return fs.map(function (f) { return f.id + ":" + (f.mtime || 0) + ":" + f.size; }).join("|");
         }
         function refreshFiles() {
           if (!connected) return;
           fetch(base + "/api/files?pwd=" + encodeURIComponent(pwd))
             .then(function (r) { return r.json(); })
             .then(function (d) {
+              var fs = (d.files || []).slice().reverse();
+              var sig = filesSig(fs);
+              if (sig === lastSig && $("files").childNodes.length) return;
+              lastSig = sig;
               var box = $("files");
               box.innerHTML = "";
-              var fs = (d.files || []).slice().reverse();
               if (!fs.length) { box.innerHTML = '<div class="empty">暂无文件</div>'; return; }
               fs.forEach(function (f) {
                 var item = document.createElement("div");

@@ -1593,7 +1593,13 @@ async fn upload(
             mtime: file_mtime_secs(&path),
             session: true, // 本次会话上传 → 传输页会展示
         };
-        st.inner.files.lock().unwrap().insert(id.clone(), rec);
+        st.inner.files.lock().unwrap().insert(id.clone(), rec.clone());
+        // 上传即预热缩略图：放到后台单线程队列里慢慢生成。
+        // 这样打开列表时每张都是缓存命中（1ms），而不是现场解码（几十上百 ms）——
+        // 手机端滚动列表时尤其明显。失败无所谓，真正的请求还会再生成一次。
+        if thumbs::is_image_ext(&file_ext(&name)) {
+            thumbs::warm(&thumbs::cache_dir(), &rec.path, &rec.id, rec.mtime);
+        }
         broadcast_files(&st);
         return Json(json!({ "id": id, "name": name, "size": data.len() })).into_response();
     }
@@ -1653,26 +1659,28 @@ async fn thumb(
     }
 
     let dir = thumbs::cache_dir();
-    let cache = thumbs::cache_path(&dir, &r.id, r.mtime, thumbs::THUMB_SIZE);
+    // 允许前端要更小的一档：手机列表行只有 44px，没必要传 320px 的图。
+    // 上限锁死在 THUMB_SIZE，避免被请求方要一张巨图。
+    let want = q
+        .get("w")
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(thumbs::THUMB_SIZE)
+        .clamp(48, thumbs::THUMB_SIZE);
 
     // 命中缓存直接返回，避免每次滚动列表都重新解码
-    if let Ok(bytes) = tokio::fs::read(&cache).await {
+    if let Ok(bytes) = tokio::fs::read(thumbs::cache_path(&dir, &r.id, r.mtime, want)).await {
         return jpeg_response(bytes);
     }
 
-    let _ = tokio::fs::create_dir_all(&dir).await;
     let src = r.path.clone();
-    let cache2 = cache.clone();
-    // 解码 / 缩放 / 编码都是 CPU 密集的同步操作，必须离开异步运行时线程
-    let made = tokio::task::spawn_blocking(move || {
-        let bytes = thumbs::generate(&src, thumbs::THUMB_SIZE)?;
-        // 缓存写失败不影响本次返回（磁盘满、杀软占用等）
-        let _ = std::fs::write(&cache2, &bytes);
-        Some(bytes)
-    })
-    .await
-    .ok()
-    .flatten();
+    let id = r.id.clone();
+    let mtime = r.mtime;
+    // 解码 / 缩放 / 编码都是 CPU 密集的同步操作，必须离开异步运行时线程。
+    // ensure() 内部会先尝试 320 缓存、再降采样，比重新解码原图快得多。
+    let made = tokio::task::spawn_blocking(move || thumbs::ensure(&dir, &src, &id, mtime, want))
+        .await
+        .ok()
+        .flatten();
 
     match made {
         Some(bytes) => jpeg_response(bytes),
