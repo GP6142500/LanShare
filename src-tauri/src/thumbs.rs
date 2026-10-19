@@ -30,15 +30,31 @@ const MAX_PIXELS: u64 = 80_000_000;
 /// 缓存保留天数。超期的缩略图在服务启动时清掉。
 const CACHE_MAX_AGE_DAYS: u64 = 30;
 
-/// 能出缩略图的扩展名（小写、不含点）。
+/// 能出缩略图的图片扩展名（小写、不含点）。
 ///
 /// 只列 `Cargo.toml` 里已启用解码器的格式。`heic` / `avif` / `tiff` 等
-/// 不在此列 —— 前端会退化成类型徽章，不会发出无效请求。
+/// 不在此列 —— 它们会走系统缩略图（见下方 shell 模块），前端不会发出无效请求。
 const IMAGE_EXTS: &[&str] = &["jpg", "jpeg", "png", "gif", "bmp", "webp"];
 
-/// 是否是可生成缩略图的图片格式。
+/// 能出缩略图的视频扩展名。交给系统缩略图服务解码，
+/// 具体能不能出图取决于系统装没装对应解码器（h264 mp4 / mov 基本都行）。
+const VIDEO_EXTS: &[&str] = &[
+    "mp4", "m4v", "mov", "avi", "mkv", "wmv", "webm", "flv", "mpg", "mpeg", "3gp", "ts",
+];
+
+/// 是否是可由 image 直接解码的图片格式。
 pub fn is_image_ext(ext: &str) -> bool {
     IMAGE_EXTS.iter().any(|e| *e == ext)
+}
+
+/// 是否是可交给系统缩略图的视频格式。
+pub fn is_video_ext(ext: &str) -> bool {
+    VIDEO_EXTS.iter().any(|e| *e == ext)
+}
+
+/// 是否值得请求缩略图（前端据此决定发不发 `/api/thumb`）。
+pub fn can_thumb_ext(ext: &str) -> bool {
+    is_image_ext(ext) || is_video_ext(ext)
 }
 
 /// 缩略图缓存目录（`%APPDATA%\lanshare\thumbs`，测试时跟随 `LANSHARE_CONFIG_DIR`）。
@@ -53,9 +69,37 @@ pub fn cache_path(dir: &Path, id: &str, mtime: i64, size: u32) -> PathBuf {
 
 /// 生成一张缩略图，返回 JPEG 字节。
 ///
+/// 双路径分派（2B + 2C）：
+///
+/// 1. **视频** → 直接走系统缩略图（Windows Shell），image 无能为力；
+///    系统出不了图（缺解码器）就返回 `None`，前端退化为徽章。
+/// 2. **图片** → 先走 image（快、可控：不放大、白底压平、EXIF 纠正）；
+///    image 解不了（HEIC / TIFF / 冷门 webp 变体 / 损坏文件）再让系统
+///    解码器兜底试一次 —— 系统装的「HEVC 图像扩展」等正好补上这块覆盖。
+///
 /// 失败（格式不支持、文件损坏、图太大、IO 错误）统一返回 `None`，
 /// 由调用方转成 404，前端据此显示类型徽章 —— 缩略图失败不该是个错误弹窗。
-pub fn generate(src: &Path, size: u32) -> Option<Vec<u8>> {    let reader = image::ImageReader::open(src)
+pub fn generate(src: &Path, size: u32) -> Option<Vec<u8>> {
+    let ext = src
+        .extension()
+        .map(|s| s.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+
+    if is_video_ext(&ext) {
+        return shell::generate(src, size);
+    }
+
+    match generate_image(src, size) {
+        Some(bytes) => Some(bytes),
+        // 只有 image 声称支持的图片才值得让系统兜底，别的类型去了也是白跑
+        None if is_image_ext(&ext) => shell::generate(src, size),
+        None => None,
+    }
+}
+
+/// image crate 路径：解码 → EXIF 纠正 → 缩放 → JPEG。
+fn generate_image(src: &Path, size: u32) -> Option<Vec<u8>> {
+    let reader = image::ImageReader::open(src)
         .ok()?
         .with_guessed_format()
         .ok()?;
@@ -255,6 +299,141 @@ pub fn prune_old(dir: &Path) -> usize {
     n
 }
 
+// ---------------------------- 系统缩略图（2C 路径） ----------------------------
+// 交给 Windows Shell 拿资源管理器同款缩略图：
+// 视频靠系统解码器（h264 mp4/mov 基本都行），HEIC/TIFF 等 image 解不了的
+// 图片也能借「HEVC 图像扩展」之类补上。`windows` 本来就是 wry 的传递依赖，
+// 显式启用 feature 不新增 crate。失败一律安静地返回 None，绝不 panic。
+
+#[cfg(windows)]
+mod shell {
+    use std::path::Path;
+
+    use windows::core::HSTRING;
+    use windows::Win32::Foundation::SIZE;
+    use windows::Win32::Graphics::Gdi::{
+        CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, GetDIBits, GetObjectW, ReleaseDC,
+        SelectObject, BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS,
+    };
+    use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
+    use windows::Win32::UI::Shell::{
+        IShellItemImageFactory, SHCreateItemFromParsingName, SIIGBF_RESIZETOFIT,
+        SIIGBF_THUMBNAILONLY,
+    };
+
+    /// 在当前线程初始化 COM（MTA），每个线程只做一次。
+    ///
+    /// 调用方是预热线程与 `spawn_blocking` 工作线程，都没有消息泵，
+    /// 用 STA 反而有跨套间回调死锁的风险 —— MTA 下 Shell 的缩略图服务
+    /// 工作正常（已实测）。返回 S_FALSE / RPC_E_CHANGED_MODE 说明线程
+    /// 上已有套间，直接复用即可，都不需要配对 `CoUninitialize`
+    ///（线程随进程存活，回收交给系统）。
+    fn ensure_com() {
+        thread_local! {
+            static DONE: bool = {
+                let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+                true
+            };
+        }
+        DONE.with(|_| {});
+    }
+
+    /// 让 Shell 出一张缩略图并编码为 JPEG。
+    ///
+    /// `SIIGBF_THUMBNAILONLY` 保证拿到的是**真实画面帧**而不是文件类型图标；
+    /// 系统没装解码器时该调用失败，正好走兜底/徽章，不会给出一张假图。
+    pub(super) fn generate(src: &Path, size: u32) -> Option<Vec<u8>> {
+        ensure_com();
+        // HSTRING 而不是 to_wide 手搓：保证 NUL 结尾与 UTF-16 编码正确
+        let path = HSTRING::from(src.as_os_str().to_string_lossy().to_string());
+        unsafe {
+            let factory: IShellItemImageFactory = SHCreateItemFromParsingName(&path, None).ok()?;
+            let hbmp = factory
+                .GetImage(
+                    SIZE {
+                        cx: size as i32,
+                        cy: size as i32,
+                    },
+                    SIIGBF_THUMBNAILONLY | SIIGBF_RESIZETOFIT,
+                )
+                .ok()?;
+
+            let out = hbmp_to_jpeg(hbmp);
+            let _ = DeleteObject(hbmp.into());
+            out
+        }
+    }
+
+    /// HBITMAP → BGRA 像素 → JPEG。失败返回 None（bitmp 无论如何都会被释放）。
+    unsafe fn hbmp_to_jpeg(hbmp: windows::Win32::Graphics::Gdi::HBITMAP) -> Option<Vec<u8>> {
+        let mut bm = BITMAP::default();
+        let got = GetObjectW(
+            hbmp.into(),
+            std::mem::size_of::<BITMAP>() as i32,
+            Some(&mut bm as *mut _ as *mut _),
+        );
+        if got == 0 {
+            return None;
+        }
+        let w = bm.bmWidth as u32;
+        let h = bm.bmHeight as u32;
+        if w == 0 || h == 0 {
+            return None;
+        }
+
+        // 请求 32bpp 顶行在前的 DIB：负 biHeight = top-down，省一次翻转
+        let mut bi = BITMAPINFO::default();
+        bi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+        bi.bmiHeader.biWidth = w as i32;
+        bi.bmiHeader.biHeight = -(h as i32);
+        bi.bmiHeader.biPlanes = 1;
+        bi.bmiHeader.biBitCount = 32;
+        bi.bmiHeader.biCompression = 0; // BI_RGB
+
+        let mut buf = vec![0u8; (w as usize) * (h as usize) * 4];
+        let screen = GetDC(None);
+        let mem = CreateCompatibleDC(Some(screen));
+        let old = SelectObject(mem, hbmp.into());
+        let lines = GetDIBits(
+            mem,
+            hbmp,
+            0,
+            h,
+            Some(buf.as_mut_ptr() as *mut _),
+            &mut bi,
+            DIB_RGB_COLORS,
+        );
+        SelectObject(mem, old);
+        let _ = DeleteDC(mem);
+        ReleaseDC(None, screen);
+        if lines == 0 {
+            return None;
+        }
+
+        // GetDIBits 给的是 BGRA；高位字节是垃圾值，顺手强制不透明
+        for px in buf.chunks_exact_mut(4) {
+            px.swap(0, 2);
+            px[3] = 255;
+        }
+        let img = image::RgbaImage::from_raw(w, h, buf)?;
+        let mut out = Vec::new();
+        let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 82);
+        enc.encode_image(&image::DynamicImage::ImageRgba8(img).to_rgb8())
+            .ok()?;
+        Some(out)
+    }
+}
+
+/// 非 Windows 没有 Shell 缩略图：视频直接退徽章，图片仍走 image 路径。
+#[cfg(not(windows))]
+mod shell {
+    use std::path::Path;
+
+    pub(super) fn generate(_src: &Path, _size: u32) -> Option<Vec<u8>> {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,6 +451,26 @@ mod tests {
         assert!(!is_image_ext("heic"));
         assert!(!is_image_ext("pdf"));
         assert!(!is_image_ext(""));
+    }
+
+    #[test]
+    fn video_ext_matches_lowercase_only() {
+        assert!(is_video_ext("mp4"));
+        assert!(is_video_ext("mkv"));
+        assert!(is_video_ext("mov"));
+        assert!(!is_video_ext("MP4"), "调用方负责转小写");
+        assert!(!is_video_ext("jpg"), "图片不属于视频");
+        assert!(!is_video_ext(""));
+    }
+
+    #[test]
+    fn can_thumb_ext_covers_images_and_videos() {
+        for e in ["jpg", "png", "webp", "mp4", "mkv", "avi"] {
+            assert!(can_thumb_ext(e), "{e} 应该可以出缩略图");
+        }
+        for e in ["pdf", "txt", "zip", "heic", ""] {
+            assert!(!can_thumb_ext(e), "{e} 不应该请求缩略图");
+        }
     }
 
     #[test]

@@ -466,9 +466,17 @@
   const SVG_DEL =
     '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M19 6l-1 14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>';
 
-  // 能出缩略图的扩展名，必须与后端 thumbs::IMAGE_EXTS 保持一致。
+  // 能出缩略图的扩展名，必须与后端 thumbs 的 IMAGE_EXTS / VIDEO_EXTS 保持一致。
   // 不一致的后果是「请求打过去得到 404、白跑一趟」，图还没显示出来。
-  const IMAGE_EXTS = new Set(["jpg", "jpeg", "png", "gif", "bmp", "webp"]);
+  // 图片与视频都会返回真实缩略图（视频由系统解码器出帧，失败时退徽章）。
+  const THUMB_EXTS = new Set([
+    "jpg", "jpeg", "png", "gif", "bmp", "webp",
+    "mp4", "m4v", "mov", "avi", "mkv", "wmv", "webm", "flv", "mpg", "mpeg", "3gp", "ts",
+  ]);
+  // 需要叠加播放角标的视频格式（THUMB_EXTS 的子集，便于区分展示）
+  const VIDEO_EXTS = new Set([
+    "mp4", "m4v", "mov", "avi", "mkv", "wmv", "webm", "flv", "mpg", "mpeg", "3gp", "ts",
+  ]);
 
   function makeRevealBtn(f) {
     const b = document.createElement("button");
@@ -598,7 +606,7 @@
 
     const thumb = document.createElement("div");
     thumb.className = "thumb";
-    if (IMAGE_EXTS.has(ext)) {
+    if (THUMB_EXTS.has(ext)) {
       const img = document.createElement("img");
       // 历史页可能有几百个文件，懒加载避免一次性发起全部缩略图请求
       img.loading = "lazy";
@@ -607,6 +615,11 @@
       img.src = thumbUrl(f);
       img.onerror = () => img.replaceWith(makeExtBadge(ext));
       thumb.appendChild(img);
+      if (VIDEO_EXTS.has(ext)) {
+        const play = document.createElement("span");
+        play.className = "play";
+        thumb.appendChild(play);
+      }
     } else {
       thumb.appendChild(makeExtBadge(ext));
     }

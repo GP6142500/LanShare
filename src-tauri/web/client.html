@@ -66,10 +66,12 @@
       .item .name { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .item .sub { font-size: 12px; color: var(--muted); }
       .item .acts { display: flex; gap: 6px; flex-shrink: 0; }
-      /* 文件行缩略图：图片走服务端 320px 缩略图，其余显示扩展名徽章 */
-      .item .thumb { width: 44px; height: 44px; flex: 0 0 44px; border-radius: 8px; overflow: hidden; background: var(--accent-soft); display: grid; place-items: center; }
+      /* 文件行缩略图：图片/视频走服务端缩略图，其余显示扩展名徽章 */
+      .item .thumb { width: 44px; height: 44px; flex: 0 0 44px; border-radius: 8px; overflow: hidden; background: var(--accent-soft); display: grid; place-items: center; position: relative; }
       .item .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
       .item .thumb .ext { font-size: 10px; font-weight: 700; letter-spacing: .3px; color: var(--accent); }
+      /* 视频播放角标：压在画面中央的小三角 */
+      .item .thumb .play { position: absolute; left: 50%; top: 50%; width: 0; height: 0; transform: translate(-40%, -50%); border-style: solid; border-width: 6px 0 6px 10px; border-color: transparent transparent transparent rgba(255,255,255,.92); filter: drop-shadow(0 0 2px rgba(0,0,0,.6)); }
       textarea { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; width: 100%; min-height: 92px; resize: vertical; }
       textarea:focus { outline: none; border-color: var(--accent); }
       .empty { color: var(--muted); font-size: 13px; padding: 6px 2px; }
@@ -236,8 +238,10 @@
           if (b < 1073741824) return (b / 1048576).toFixed(1) + " MB";
           return (b / 1073741824).toFixed(2) + " GB";
         }
-        // 与主机端一致：这几种扩展名服务端能生成缩略图，其余画扩展名徽章
+        // 与主机端一致：这几种扩展名服务端能生成缩略图，其余画扩展名徽章。
+        // 视频由主机上的系统解码器出帧，出不了图时 onerror 退徽章。
         var IMG_EXTS = { jpg: 1, jpeg: 1, png: 1, gif: 1, webp: 1, bmp: 1 };
+        var VIDEO_EXTS = { mp4: 1, m4v: 1, mov: 1, avi: 1, mkv: 1, wmv: 1, webm: 1, flv: 1, mpg: 1, mpeg: 1, "3gp": 1, ts: 1 };
         function extOf(name) {
           var i = (name || "").lastIndexOf(".");
           return i < 0 ? "" : name.slice(i + 1).toLowerCase();
@@ -280,18 +284,23 @@
                 item.innerHTML = '<div class="thumb"></div><div class="meta"><div class="name"></div><div class="sub"></div></div><div class="acts"></div>';
                 var thumb = item.querySelector(".thumb");
                 var ext = (f.ext || extOf(f.name)).toLowerCase();
-                if (IMG_EXTS[ext]) {
+                if (IMG_EXTS[ext] || VIDEO_EXTS[ext]) {
                   var img = document.createElement("img");
                   img.loading = "lazy";
                   img.decoding = "async";
                   img.alt = "";
                   img.src = thumbUrl(f);
-                  // 解码失败（图片损坏 / 超大图被拦）时退化为徽章，不留破图图标
+                  // 解码失败（图片损坏 / 视频缺解码器）时退化为徽章，不留破图图标
                   img.onerror = function () {
                     thumb.innerHTML = "";
                     thumb.appendChild(makeBadge(ext));
                   };
                   thumb.appendChild(img);
+                  if (VIDEO_EXTS[ext]) {
+                    var play = document.createElement("span");
+                    play.className = "play";
+                    thumb.appendChild(play);
+                  }
                 } else {
                   thumb.appendChild(makeBadge(ext));
                 }

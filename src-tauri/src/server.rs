@@ -1204,7 +1204,7 @@ fn history_list_with_path(st: &AppState) -> Vec<serde_json::Value> {
 /// 取文件扩展名（小写、不含点）。没有扩展名时返回空串。
 ///
 /// 前端靠它判断「能否放缩略图」和「画哪种类型徽章」，
-/// 因此必须与 `thumbs::is_image_ext` 用同一套小写约定。
+/// 因此必须与 `thumbs::can_thumb_ext` 用同一套小写约定。
 fn file_ext(name: &str) -> String {
     std::path::Path::new(name)
         .extension()
@@ -1597,7 +1597,7 @@ async fn upload(
         // 上传即预热缩略图：放到后台单线程队列里慢慢生成。
         // 这样打开列表时每张都是缓存命中（1ms），而不是现场解码（几十上百 ms）——
         // 手机端滚动列表时尤其明显。失败无所谓，真正的请求还会再生成一次。
-        if thumbs::is_image_ext(&file_ext(&name)) {
+        if thumbs::can_thumb_ext(&file_ext(&name)) {
             thumbs::warm(&thumbs::cache_dir(), &rec.path, &rec.id, rec.mtime);
         }
         broadcast_files(&st);
@@ -1653,9 +1653,9 @@ async fn thumb(
     let Some(r) = rec else {
         return (StatusCode::NOT_FOUND, "not found").into_response();
     };
-    // 非图片一律 404：前端据此画类型徽章，不需要再发一次请求
-    if !thumbs::is_image_ext(&file_ext(&r.name)) {
-        return (StatusCode::NOT_FOUND, "not an image").into_response();
+    // 图片与视频之外的类型一律 404：前端据此画类型徽章，不需要再发一次请求
+    if !thumbs::can_thumb_ext(&file_ext(&r.name)) {
+        return (StatusCode::NOT_FOUND, "no thumbnail for this type").into_response();
     }
 
     let dir = thumbs::cache_dir();

@@ -629,6 +629,27 @@ input:focus {
   object-fit: cover;
   display: block;
 }
+/* 视频缩略图角标：居中半透明圆 + 三角，压在画面上提示「这是视频」 */
+.card-item .thumb .play {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 30px;
+  height: 30px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+}
+.card-item .thumb .play::after {
+  content: "";
+  position: absolute;
+  left: 12px;
+  top: 8px;
+  border-style: solid;
+  border-width: 7px 0 7px 11px;
+  border-color: transparent transparent transparent #fff;
+}
 /* 历史页的设备名：压在缩略图左上角，不占额外高度 */
 .card-item .ci-up {
   position: absolute;

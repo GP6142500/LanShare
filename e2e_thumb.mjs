@@ -5,9 +5,12 @@
 //   - /api/files 带 ext 字段（前端靠它决定「放缩略图」还是「画类型徽章」）
 //   - 缓存落盘到 <配置目录>/thumbs/，二次请求命中缓存且内容一致
 //   - 小图不被放大（thumbnail 只缩不放）
+//   - 真实 mp4 视频由系统解码器出真实画面帧（双路径 2C）
 //   - 非图片 / 错密码 / 不存在的 id 分别返回 404 / 403 / 404
 //
 // 图片由本脚本用 zlib 直接拼 PNG（无第三方依赖）。
+// 测试视频从 test-videos.co.uk 下载 Big Buck Bunny 片段（约 1MB，h264）；
+// 下载失败（无网）时自动跳过视频用例，不影响其余断言。
 
 import { spawn } from "node:child_process";
 import fs from "node:fs";
@@ -143,6 +146,25 @@ async function upload(name, buf) {
   return r.ok;
 }
 
+/// 拿一个真实 mp4：本机缓存过就直接用，否则尝试下载；失败返回 null（跳过视频用例）
+const VIDEO_URL =
+  "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/360/Big_Buck_Bunny_360_10s_1MB.mp4";
+async function ensureVideo() {
+  const local = path.join(TMP, "video.mp4");
+  if (fs.existsSync(local)) return local;
+  try {
+    const r = await fetch(VIDEO_URL, { signal: AbortSignal.timeout(30000) });
+    if (!r.ok) return null;
+    const b = Buffer.from(await r.arrayBuffer());
+    // 校验 mp4 魔数 ftyp，防止把 HTML 错误页当视频
+    if (b.length < 32 || b.toString("ascii", 4, 8) !== "ftyp") return null;
+    fs.writeFileSync(local, b);
+    return local;
+  } catch {
+    return null;
+  }
+}
+
 async function main() {
   console.log("端到端：缩略图接口\n");
   const child = spawn(EXE, [], {
@@ -168,10 +190,18 @@ async function main() {
   ok("上传 800x600 PNG 成功", await upload("大图.png", makePng(800, 600)));
   ok("上传 32x32 PNG 成功", await upload("小图.png", makePng(32, 32)));
   ok("上传 txt（非图片）成功", await upload("说明.txt", Buffer.from("hello")));
+  const videoPath = await ensureVideo();
+  const hasVideo = !!videoPath;
+  if (hasVideo) {
+    ok("上传 mp4 视频成功", await upload("视频.mp4", fs.readFileSync(videoPath)));
+  } else {
+    console.log("  - （测试视频不可得，跳过视频缩略图用例）");
+  }
 
+  const expectCount = hasVideo ? 4 : 3;
   const list = await (await fetch(`${BASE}/api/files?pwd=${encodeURIComponent(PWD)}`)).json();
   const files = list.files || list.history || [];
-  ok("文件列表返回 3 个条目", files.length === 3, `count=${files.length}`);
+  ok(`文件列表返回 ${expectCount} 个条目`, files.length === expectCount, `count=${files.length}`);
 
   const big = files.find((f) => f.name === "大图.png");
   const small = files.find((f) => f.name === "小图.png");
@@ -198,6 +228,25 @@ async function main() {
   const cached = fs.existsSync(thumbDir) ? fs.readdirSync(thumbDir) : [];
   ok("缓存目录已写入该文件的缩略图",
      cached.some((n) => n.startsWith(big.id + "-")), cached.join(", "));
+
+  // ---- 视频：系统缩略图路径（2C）----
+  if (hasVideo) {
+    const vid = files.find((f) => f.name === "视频.mp4");
+    ok("视频条目带 ext 字段（mp4）", vid && vid.ext === "mp4", JSON.stringify(vid));
+    const rv = await fetch(thumbUrl(vid));
+    ok("视频缩略图返回 200（系统解码器出真实画面帧）", rv.status === 200, `status=${rv.status}`);
+    if (rv.status === 200) {
+      const jv = Buffer.from(await rv.arrayBuffer());
+      ok("视频缩略图是 JPEG（FF D8 FF）", jv.length > 3 && jv[0] === 0xff && jv[1] === 0xd8 && jv[2] === 0xff);
+      const dv = jpegSize(jv);
+      ok("视频缩略图最长边不超过 320", dv && dv.w <= 320 && dv.h <= 320, JSON.stringify(dv));
+      ok("视频缩略图缓存落盘",
+         fs.readdirSync(thumbDir).some((n) => n.startsWith(vid.id + "-")));
+      // 二次请求应命中自己的磁盘缓存
+      const rv2 = await fetch(thumbUrl(vid));
+      ok("视频缩略图二次请求命中缓存", rv2.status === 200, `status=${rv2.status}`);
+    }
+  }
 
   const r2 = await fetch(thumbUrl(big));
   const jpg2 = Buffer.from(await r2.arrayBuffer());
