@@ -5,7 +5,8 @@ description = "局域网文件与文本互传"
 authors = ["高鹏"]
 license = "MIT"
 edition = "2021"
-rust-version = "1.77"
+# 1.88 是 image 0.25 的最低要求（缩略图生成用）；低于此版本无法构建
+rust-version = "1.88"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -23,6 +24,15 @@ qrcode = { version = "0.12", features = ["svg"] }
 uuid = { version = "1", features = ["v4"] }
 mime_guess = "2"
 percent-encoding = "2"
+# 缩略图生成：只开需要的解码器（jpeg/png/gif/webp/bmp），
+# 关掉 tiff/exr/avif 等冷门格式以控制产物体积与编译时间。
+image = { version = "0.25", default-features = false, features = [
+    "jpeg",
+    "png",
+    "gif",
+    "webp",
+    "bmp",
+] }
 dirs = "5"
 tower-http = { version = "0.5", features = ["cors"] }
 rand = "0.8"

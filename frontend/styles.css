@@ -590,6 +590,153 @@ input:focus {
   gap: 8px;
 }
 
+/* ----------------- 缩略图网格视图 ----------------- */
+/* 同一个容器，加 .grid 即切换布局；列表样式完全不受影响 */
+.list.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 12px;
+}
+/* 空状态横跨整行，别被挤在第一列 */
+.list.grid > .empty {
+  grid-column: 1 / -1;
+}
+
+.card-item {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  overflow: hidden;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.card-item:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.card-item .thumb {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.03);
+  overflow: hidden;
+}
+.card-item .thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+/* 历史页的设备名：压在缩略图左上角，不占额外高度 */
+.card-item .ci-up {
+  position: absolute;
+  left: 6px;
+  top: 6px;
+  max-width: calc(100% - 12px);
+  font-size: 10.5px;
+  line-height: 1.7;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: rgba(17, 24, 39, 0.62);
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.card-item .ci-body {
+  padding: 7px 9px 9px;
+}
+.card-item .ci-name {
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.35;
+  /* 单行名与两行名的卡片等高，网格才整齐 */
+  min-height: 2.7em;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-all;
+}
+.card-item .ci-sub {
+  font-size: 11.5px;
+  color: var(--muted);
+  margin-top: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* 定位 / 删除按钮：hover 才浮现，平时不挡缩略图 */
+.card-item .ci-acts {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.card-item:hover .ci-acts,
+.card-item:focus-within .ci-acts {
+  opacity: 1;
+}
+.card-item .ci-acts .icon-btn {
+  width: 26px;
+  height: 26px;
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.92);
+  color: #374151;
+}
+.card-item .ci-acts .icon-btn:hover {
+  background: var(--accent);
+  color: #fff;
+}
+.card-item .ci-acts .icon-btn.danger:hover {
+  background: #ef4444;
+  color: #fff;
+}
+
+@media (max-width: 520px) {
+  .list.grid {
+    grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+    gap: 10px;
+  }
+}
+
+/* ----------------- 视图切换按钮组 ----------------- */
+.view-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--panel);
+}
+.vt-btn {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.vt-btn:hover {
+  color: var(--text);
+}
+.vt-btn.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
 .item {
   display: flex;
   align-items: center;
@@ -894,10 +1041,64 @@ input[type="number"]:focus {
 
 /* 列表小标题：区分「当前会话文件列表」与历史 */
 .list-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   font-size: 12px;
   font-weight: 600;
   color: var(--text);
   margin-bottom: 8px;
+}
+
+/* 非图片文件的类型徽章（缩略图位置上显示）。
+   颜色按大类分组，暗色主题下也保持足够对比度。 */
+.ext-badge {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  padding: 7px 11px;
+  border-radius: 8px;
+  color: #fff;
+  background: #94a3b8;
+}
+.xt-pdf {
+  background: #dc2626;
+}
+.xt-doc {
+  background: #2563eb;
+}
+.xt-xls {
+  background: #16a34a;
+}
+.xt-ppt {
+  background: #ea580c;
+}
+.xt-zip {
+  background: #7c3aed;
+}
+.xt-video {
+  background: #0891b2;
+}
+.xt-audio {
+  background: #db2777;
+}
+.xt-text {
+  background: #64748b;
+}
+.xt-other {
+  background: #94a3b8;
+}
+
+@media (prefers-color-scheme: dark) {
+  .card-item .thumb {
+    background: rgba(255, 255, 255, 0.04);
+  }
+  .card-item .ci-acts .icon-btn {
+    background: rgba(23, 26, 33, 0.92);
+    color: #d1d5db;
+  }
 }
 
 /* 历史条目：设备名用小徽标区分 */

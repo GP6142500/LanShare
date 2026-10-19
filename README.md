@@ -22,6 +22,12 @@ Windows 桌面应用：启动后在局域网内，其他设备用浏览器打开
   - 搜索框：按**文件名**或**设备名**实时过滤
   - 图标按钮：打开接收路径文件夹、清空所有文件（带确认）
   - 每行图标按钮：打开文件所在位置、删除文件（仅主机可用，点击整行可用默认程序打开）
+- **列表 / 缩略图双视图**：「传输」页与「历史」页的文件列表可切换为缩略图网格
+  - 图片（jpg/jpeg/png/gif/bmp/webp）显示服务端生成的缩略图（最长边 320px，JPEG，EXIF 方向自动纠正）
+  - 其余文件显示按大类配色的**扩展名徽章**（PDF / DOC / XLS / PPT / 压缩包 / 视频 / 音频 / 文本）
+  - 卡片仍带**文件名（两行截断）+ 大小 + 时间**，历史页另带发送设备徽标 —— 纯靠图片认不出文件时依然可靠
+  - 视图偏好存 localStorage，两页共用；URL 加 `?view=grid|list` 可临时覆盖（不写回）
+  - 缩略图生成后缓存在 `<配置目录>/thumbs/`，响应带一年期 immutable 缓存；删除文件时同步清缓存，启动时回收 30 天前的孤儿缓存
 - **接收目录可迁移**：在「设置」中修改接收路径时，已有文件会**自动移动**到新目录（保留上传者子目录结构；同名冲突自动加 `-1` 后缀不覆盖；跨盘符自动降级为复制+删除）
 - **自动清理**：接收目录超过容量阈值（默认 2048 MB）时，启动时按最旧优先删除超过保留天数（默认 10 天）的文件；未超阈值的文件不删。阈值、天数、开关均可在「设置」中调整
 
@@ -73,6 +79,7 @@ lanshare/
 │   ├── src/
 │   │   ├── main.rs       # Tauri 入口：窗口 / 托盘 / 启动服务 / 注入端口 / 命令注册
 │   │   ├── server.rs     # axum 服务：静态页 / 上传下载 / WS 文本 / 配对 / QR / 磁盘扫描 / 自动清理 / 端口热重启
+│   │   ├── thumbs.rs     # 缩略图生成与磁盘缓存（image 解码 + EXIF 方向 + 缓存回收）
 │   │   └── firewall.rs   # Windows 防火墙检测 + 提权放行脚本生成
 │   ├── web/
 │   │   └── client.html   # 内嵌的局域网客户端页面（零依赖、自包含）
@@ -95,7 +102,7 @@ verify_mask.html          # 拖拽遮罩的浏览器渲染验证页
 
 ## 构建与运行
 
-前置：Rust 工具链（cargo 1.77+）、Node.js（含 pnpm/npm）、NSIS（用于 `nsis` 打包）、WebView2 运行时（Windows 11 自带）。
+前置：Rust 工具链（cargo 1.88+，由 `image 0.25` 的 MSRV 决定）、Node.js（含 pnpm/npm）、NSIS（用于 `nsis` 打包）、WebView2 运行时（Windows 11 自带）。
 
 ```bash
 # 安装 Tauri CLI（若未装）
@@ -177,15 +184,19 @@ node e2e_drop_upload.mjs         # 拖拽上传遮罩逻辑
 
 # 需要真实 exe（会拉起服务、使用独立测试配置目录）
 node e2e_upload_endpoint.mjs      "$EXE"
+node e2e_thumb.mjs                "$EXE"   # 缩略图接口：生成/缓存/鉴权/清理
 node e2e_port_hot_switch.mjs      "$EXE"
 node e2e_restart_port_stable.mjs  "$EXE"
 node e2e_scan_token.mjs           "$EXE"
 node e2e_qr_and_client.mjs        "$EXE"
 
-# 真实浏览器渲染（Edge headless + CDP，需要 file:// URL）
+# 真实浏览器渲染（Edge headless，需要 file:// URL）
 node e2e_firewall_render.mjs      "file:///.../frontend/index.html"
 node e2e_about_render.mjs         "file:///.../frontend/index.html"
 node e2e_drop_mask_render.mjs     "file:///.../verify_mask.html"
+
+# 真实浏览器 + 真实服务（截图网格视图，参数是 exe）
+node e2e_grid_render.mjs          "$EXE"
 ```
 
 测试过程中生成的截图（`*-preview.png`）已加入 `.gitignore`，仅作本地人工核对用，不入库。

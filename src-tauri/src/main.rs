@@ -2,6 +2,7 @@
 
 mod firewall;
 mod server;
+mod thumbs;
 
 use server::AppState;
 use tauri::menu::{Menu, MenuItem};
@@ -32,6 +33,12 @@ fn main() {
                 }
                 // 扫描接收目录，恢复历史文件列表（重启后仍可管理历史）
                 boot.restore_on_start();
+                // 缩略图缓存：清掉 30 天前的孤儿文件（源文件被删/覆盖后残留）。
+                // 放阻塞线程池，别拖慢服务启动。
+                let _ = tauri::async_runtime::spawn_blocking(|| {
+                    thumbs::prune_old(&thumbs::cache_dir())
+                })
+                .await;
                 let _ = boot.start().await;
                 // 服务已绑定（端口已确定为最终值），此时再注入端口并唤醒前端
                 let port = boot.config().port;

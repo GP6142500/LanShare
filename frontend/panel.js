@@ -2,6 +2,21 @@
 (function () {
   let serverPort = window.__LAN_PORT || 18765;
   let hostPassword = "";
+  // 文件视图模式：list（列表，默认）/ grid（缩略图网格）。
+  // 传输页与历史页共用同一份偏好 —— 用户切一次就该两页都变，
+  // 否则「我明明切成缩略图了，换个页又变回去」很怪。
+  const VIEW_MODE_KEY = "lanshare.viewmode";
+  // ?view=grid|list 可覆盖本地偏好（截图 / 演示 / 自动化测试用），
+  // 只影响本次加载，不写回 localStorage，不会污染用户选择。
+  const urlView = new URLSearchParams(location.search).get("view");
+  let viewMode = "list";
+  if (urlView === "grid" || urlView === "list") {
+    viewMode = urlView;
+  } else {
+    try {
+      viewMode = localStorage.getItem(VIEW_MODE_KEY) === "grid" ? "grid" : "list";
+    } catch (e) {}
+  }
   // cfg 在 get_config 返回前只是占位桩，不能拿它做「是否已修改」的比对，
   // 否则刚启动就会被判定成「端口/目录被改过」。cfgLoaded 标记真实配置是否已就位。
   let cfg = { port: serverPort, password: "", storage_dir: "", auto_start: true };
@@ -444,8 +459,53 @@
   }
 
   // ----------------- 接收的文件（主机面板） -----------------
-  // 主机：点击文件行=用默认程序打开；右侧图标=打开文件所在位置 / 删除
-  // 传输页与历史页共用同一套渲染，只在「是否显示设备徽标」上略有差异
+  // 列表视图：点击整行=用默认程序打开；右侧图标=打开文件所在位置 / 删除
+  // 缩略图视图：同样的动作，按钮放在卡片右上角（hover 时浮现）
+  const SVG_REVEAL =
+    '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
+  const SVG_DEL =
+    '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M19 6l-1 14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>';
+
+  // 能出缩略图的扩展名，必须与后端 thumbs::IMAGE_EXTS 保持一致。
+  // 不一致的后果是「请求打过去得到 404、白跑一趟」，图还没显示出来。
+  const IMAGE_EXTS = new Set(["jpg", "jpeg", "png", "gif", "bmp", "webp"]);
+
+  function makeRevealBtn(f) {
+    const b = document.createElement("button");
+    b.className = "icon-btn sm";
+    b.title = "打开所在位置";
+    b.setAttribute("aria-label", "打开所在位置");
+    b.innerHTML = SVG_REVEAL;
+    b.onclick = (e) => {
+      e.stopPropagation();
+      if (f.path) safe("reveal_path", { path: f.path });
+    };
+    return b;
+  }
+
+  function makeDelBtn(f) {
+    const b = document.createElement("button");
+    b.className = "icon-btn sm danger";
+    b.title = "删除文件";
+    b.setAttribute("aria-label", "删除文件");
+    b.innerHTML = SVG_DEL;
+    b.onclick = async (e) => {
+      e.stopPropagation();
+      if (!window.confirm('删除文件「' + f.name + '」？此操作不可恢复。')) return;
+      b.disabled = true;
+      const ok = await safe("delete_received_file", { id: f.id });
+      if (ok === false) {
+        b.disabled = false;
+        toast("删除失败，文件可能已被移除");
+        refreshFiles();
+      } else {
+        toast("已删除");
+        refreshFiles();
+      }
+    };
+    return b;
+  }
+
   function buildFileRow(f, opts) {
     const showUploader = !(opts && opts.showUploader === false);
     const item = document.createElement("div");
@@ -474,42 +534,111 @@
       item.onclick = () => safe("open_path", { path: f.path });
     }
 
-    // 图标：打开所在位置
-    const reveal = document.createElement("button");
-    reveal.className = "icon-btn sm";
-    reveal.title = "打开所在位置";
-    reveal.setAttribute("aria-label", "打开所在位置");
-    reveal.innerHTML =
-      '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
-    reveal.onclick = (e) => {
-      e.stopPropagation();
-      if (f.path) safe("reveal_path", { path: f.path });
-    };
-    item.querySelector(".acts").appendChild(reveal);
-
-    // 图标：删除该文件
-    const del = document.createElement("button");
-    del.className = "icon-btn sm danger";
-    del.title = "删除文件";
-    del.setAttribute("aria-label", "删除文件");
-    del.innerHTML =
-      '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M19 6l-1 14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>';
-    del.onclick = async (e) => {
-      e.stopPropagation();
-      if (!window.confirm('删除文件「' + f.name + '」？此操作不可恢复。')) return;
-      del.disabled = true;
-      const ok = await safe("delete_received_file", { id: f.id });
-      if (ok === false) {
-        del.disabled = false;
-        toast("删除失败，文件可能已被移除");
-        refreshFiles();
-      } else {
-        toast("已删除");
-        refreshFiles();
-      }
-    };
-    item.querySelector(".acts").appendChild(del);
+    item.querySelector(".acts").appendChild(makeRevealBtn(f));
+    item.querySelector(".acts").appendChild(makeDelBtn(f));
     return item;
+  }
+
+  // ----------------- 缩略图视图 -----------------
+  // 缩略图由后端 /api/thumb/:id 生成并缓存（见 src-tauri/src/thumbs.rs）。
+  // 非图片、或生成失败（损坏 / 超大 / 解码器不支持），一律退化为扩展名徽章，
+  // 不弹错误 —— 缩略图出不来不该是个故障。
+
+  /// 扩展名 → 徽章配色（纯展示，按大类分组）
+  function extClass(ext) {
+    const e = (ext || "").toLowerCase();
+    if (e === "pdf") return "xt-pdf";
+    if (["doc", "docx", "rtf", "odt", "wps"].includes(e)) return "xt-doc";
+    if (["xls", "xlsx", "csv", "ods", "et"].includes(e)) return "xt-xls";
+    if (["ppt", "pptx", "odp", "dps"].includes(e)) return "xt-ppt";
+    if (["zip", "rar", "7z", "tar", "gz", "bz2", "xz"].includes(e)) return "xt-zip";
+    if (["mp4", "mov", "avi", "mkv", "wmv", "flv", "webm", "m4v"].includes(e)) return "xt-video";
+    if (["mp3", "wav", "flac", "m4a", "aac", "ogg", "wma"].includes(e)) return "xt-audio";
+    if (
+      ["txt", "md", "log", "json", "xml", "yaml", "yml", "html", "css", "js", "ts", "py", "rs"].includes(e)
+    )
+      return "xt-text";
+    return "xt-other";
+  }
+
+  /// 徽章文字：最多 4 个字符，避免 DOCX/APK 这类撑破方块
+  function extLabel(ext) {
+    const e = (ext || "").toLowerCase();
+    if (!e) return "FILE";
+    return (e.length <= 4 ? e : e.slice(0, 4)).toUpperCase();
+  }
+
+  function makeExtBadge(ext) {
+    const b = document.createElement("span");
+    b.className = "ext-badge " + extClass(ext);
+    b.textContent = extLabel(ext);
+    return b;
+  }
+
+  /// 缩略图 URL。v=mtime 既让「同名文件被覆盖」后拿到新图，
+  /// 也配合后端的 immutable 缓存头做去重。
+  function thumbUrl(f) {
+    return (
+      base() +
+      "/api/thumb/" +
+      encodeURIComponent(f.id) +
+      "?pwd=" +
+      encodeURIComponent(hostPassword) +
+      "&v=" +
+      (f.mtime || 0)
+    );
+  }
+
+  function buildFileCard(f, opts) {
+    const showUploader = !(opts && opts.showUploader === false);
+    const ext = (f.ext || "").toLowerCase();
+    const card = document.createElement("div");
+    card.className = "card-item";
+    card.title = f.path ? f.name + "\n" + f.path : f.name;
+
+    const thumb = document.createElement("div");
+    thumb.className = "thumb";
+    if (IMAGE_EXTS.has(ext)) {
+      const img = document.createElement("img");
+      // 历史页可能有几百个文件，懒加载避免一次性发起全部缩略图请求
+      img.loading = "lazy";
+      img.decoding = "async";
+      img.alt = "";
+      img.src = thumbUrl(f);
+      img.onerror = () => img.replaceWith(makeExtBadge(ext));
+      thumb.appendChild(img);
+    } else {
+      thumb.appendChild(makeExtBadge(ext));
+    }
+    if (showUploader && f.uploader) {
+      const up = document.createElement("span");
+      up.className = "ci-up";
+      up.textContent = f.uploader;
+      thumb.appendChild(up);
+    }
+    card.appendChild(thumb);
+
+    const body = document.createElement("div");
+    body.className = "ci-body";
+    const name = document.createElement("div");
+    name.className = "ci-name";
+    name.textContent = f.name;
+    const sub = document.createElement("div");
+    sub.className = "ci-sub";
+    const when = fmtTime(f.mtime || f.created);
+    sub.textContent = fmtSize(f.size) + (when ? " · " + when : "");
+    body.appendChild(name);
+    body.appendChild(sub);
+    card.appendChild(body);
+
+    if (f.path) card.onclick = () => safe("open_path", { path: f.path });
+
+    const acts = document.createElement("div");
+    acts.className = "ci-acts";
+    acts.appendChild(makeRevealBtn(f));
+    acts.appendChild(makeDelBtn(f));
+    card.appendChild(acts);
+    return card;
   }
 
   function renderFiles(files) {
@@ -522,7 +651,8 @@
       box.innerHTML = '<div class="empty">当前会话暂无文件</div>';
       return;
     }
-    fs.forEach((f) => box.appendChild(buildFileRow(f, { showUploader: false })));
+    const build = viewMode === "grid" ? buildFileCard : buildFileRow;
+    fs.forEach((f) => box.appendChild(build(f, { showUploader: false })));
   }
   async function refreshFiles() {
     if (!hostPassword) {
@@ -567,7 +697,8 @@
         (historyFiles.length ? "没有匹配的文件" : "接收目录中暂无文件") +
         "</div>";
     } else {
-      fs.forEach((f) => box.appendChild(buildFileRow(f, { showUploader: true })));
+      const build = viewMode === "grid" ? buildFileCard : buildFileRow;
+      fs.forEach((f) => box.appendChild(build(f, { showUploader: true })));
     }
 
     // 汇总：文件数 + 总大小（按全部，不受搜索影响）
@@ -578,6 +709,36 @@
       if (q) text += "（筛选出 " + fs.length + " 个）";
       sum.textContent = text;
     }
+  }
+
+  // ----------------- 视图切换（列表 / 缩略图） -----------------
+  // 只切渲染方式，不动数据：切换时直接用内存里的 sessionFiles / historyFiles
+  // 重建，不重新请求接口。
+  function applyViewMode() {
+    ["file-list", "history-list"].forEach((id) => {
+      const box = $(id);
+      if (box) box.classList.toggle("grid", viewMode === "grid");
+    });
+    document.querySelectorAll(".vt-btn").forEach((b) => {
+      b.classList.toggle("active", b.dataset.mode === viewMode);
+    });
+  }
+
+  function setViewMode(mode) {
+    viewMode = mode === "grid" ? "grid" : "list";
+    try {
+      localStorage.setItem(VIEW_MODE_KEY, viewMode);
+    } catch (e) {}
+    applyViewMode();
+    renderFiles(sessionFiles);
+    renderHistory();
+  }
+
+  function initViewToggle() {
+    document.querySelectorAll(".vt-btn").forEach((b) => {
+      b.onclick = () => setViewMode(b.dataset.mode);
+    });
+    applyViewMode();
   }
 
   const histSearch = $("hist-search");
@@ -1036,6 +1197,8 @@
   // ----------------- 启动 -----------------
   async function init() {
     initNav();
+    // 视图偏好要在首屏渲染前应用，否则会先闪一下列表再变成网格
+    initViewToggle();
     renderPwd();
     // 先把真实配置读回来（拿到 cfgLoaded 基准 + 真实端口），再连 WebSocket、
     // 起定时器。否则这一小段窗口期内：定时器/事件可能拿占位 cfg 判定「已修改」，

@@ -19,6 +19,8 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tower_http::cors::CorsLayer;
 
+use crate::thumbs;
+
 type ClientSink = mpsc::UnboundedSender<String>;
 
 // ----------------------------- 数据模型 -----------------------------
@@ -167,6 +169,8 @@ impl AppState {
         let rec = self.inner.files.lock().unwrap().remove(id);
         let Some(rec) = rec else { return false };
         let _ = std::fs::remove_file(&rec.path);
+        // 同步清掉缩略图缓存：源文件没了，缓存留着只会白占空间
+        let _ = thumbs::remove_for(&thumbs::cache_dir(), id);
         broadcast_files(self);
         true
     }
@@ -195,6 +199,8 @@ impl AppState {
         restore_files_from_disk(self);
         // 清理空的上传者子目录
         prune_empty_dirs(&base);
+        // 全部文件已删，缩略图缓存也一并清掉
+        thumbs::purge(&thumbs::cache_dir());
         broadcast_files(self);
         (ok, fail)
     }
@@ -240,6 +246,7 @@ impl AppState {
                 .route("/api/file/:id", axum::routing::delete(delete_file_handler))
                 .route("/api/upload", post(upload))
                 .route("/api/download/:id", get(download))
+                .route("/api/thumb/:id", get(thumb))
                 .route("/ws", get(ws_handler))
                 // 放宽请求体上限（默认仅 2MB，手机照片/大文件会 400）；此处允许 2GB
                 .layer(DefaultBodyLimit::max(2 * 1024 * 1024 * 1024))
@@ -1194,6 +1201,18 @@ fn history_list_with_path(st: &AppState) -> Vec<serde_json::Value> {
     build_file_list(st, true, ListScope::All)
 }
 
+/// 取文件扩展名（小写、不含点）。没有扩展名时返回空串。
+///
+/// 前端靠它判断「能否放缩略图」和「画哪种类型徽章」，
+/// 因此必须与 `thumbs::is_image_ext` 用同一套小写约定。
+fn file_ext(name: &str) -> String {
+    std::path::Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default()
+}
+
 fn build_file_list(st: &AppState, with_path: bool, scope: ListScope) -> Vec<serde_json::Value> {
     let files = st.inner.files.lock().unwrap();
     let mut list: Vec<serde_json::Value> = files
@@ -1207,7 +1226,8 @@ fn build_file_list(st: &AppState, with_path: bool, scope: ListScope) -> Vec<serd
                 "uploader": r.uploader,
                 "created": r.created,
                 "mtime": r.mtime,
-                "session": r.session
+                "session": r.session,
+                "ext": file_ext(&r.name)
             });
             if with_path {
                 if let Some(obj) = v.as_object_mut() {
@@ -1607,6 +1627,68 @@ async fn download(
         }
         None => (StatusCode::NOT_FOUND, "not found").into_response(),
     }
+}
+
+/// 生成 / 读取缩略图，返回 JPEG。
+///
+/// 只给主机控制面板的网格视图用。响应带一年期 `immutable` 缓存：
+/// 前端 URL 里带 `v=<mtime>`，源文件被覆盖后 URL 与缓存文件名同时变化，
+/// 不会读到旧图。
+async fn thumb(
+    State(st): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
+    let pwd = q.get("pwd").cloned().unwrap_or_default();
+    if !check_password(&st, &pwd) {
+        return (StatusCode::FORBIDDEN, "forbidden").into_response();
+    }
+    let rec = st.inner.files.lock().unwrap().get(&id).cloned();
+    let Some(r) = rec else {
+        return (StatusCode::NOT_FOUND, "not found").into_response();
+    };
+    // 非图片一律 404：前端据此画类型徽章，不需要再发一次请求
+    if !thumbs::is_image_ext(&file_ext(&r.name)) {
+        return (StatusCode::NOT_FOUND, "not an image").into_response();
+    }
+
+    let dir = thumbs::cache_dir();
+    let cache = thumbs::cache_path(&dir, &r.id, r.mtime, thumbs::THUMB_SIZE);
+
+    // 命中缓存直接返回，避免每次滚动列表都重新解码
+    if let Ok(bytes) = tokio::fs::read(&cache).await {
+        return jpeg_response(bytes);
+    }
+
+    let _ = tokio::fs::create_dir_all(&dir).await;
+    let src = r.path.clone();
+    let cache2 = cache.clone();
+    // 解码 / 缩放 / 编码都是 CPU 密集的同步操作，必须离开异步运行时线程
+    let made = tokio::task::spawn_blocking(move || {
+        let bytes = thumbs::generate(&src, thumbs::THUMB_SIZE)?;
+        // 缓存写失败不影响本次返回（磁盘满、杀软占用等）
+        let _ = std::fs::write(&cache2, &bytes);
+        Some(bytes)
+    })
+    .await
+    .ok()
+    .flatten();
+
+    match made {
+        Some(bytes) => jpeg_response(bytes),
+        None => (StatusCode::NOT_FOUND, "no thumbnail").into_response(),
+    }
+}
+
+/// 缩略图统一响应头（版本号已在 URL 里，可以放心长缓存）。
+fn jpeg_response(bytes: Vec<u8>) -> Response {
+    Response::builder()
+        .header("Content-Type", "image/jpeg")
+        .header("Cache-Control", "public, max-age=31536000, immutable")
+        .header("Access-Control-Allow-Origin", "*")
+        .body(Body::from(bytes))
+        .unwrap()
+        .into_response()
 }
 
 // ----------------------------- WebSocket -----------------------------
