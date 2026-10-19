@@ -138,9 +138,18 @@ async fn save_settings(
     auto_cleanup: bool,
     cleanup_max_mb: u64,
     cleanup_days: u64,
+    auto_jump_on_connect: bool,
 ) -> Result<(), String> {
     state
-        .apply_settings(port, password, storage_dir, auto_cleanup, cleanup_max_mb, cleanup_days)
+        .apply_settings(
+            port,
+            password,
+            storage_dir,
+            auto_cleanup,
+            cleanup_max_mb,
+            cleanup_days,
+            auto_jump_on_connect,
+        )
         .await
 }
 

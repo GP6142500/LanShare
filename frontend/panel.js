@@ -21,6 +21,12 @@
   // 否则刚启动就会被判定成「端口/目录被改过」。cfgLoaded 标记真实配置是否已就位。
   let cfg = { port: serverPort, password: "", storage_dir: "", auto_start: true };
   let cfgLoaded = false;
+  // 当前视图：自动跳转要靠它判断「是不是已经在传输页」。
+  // 与 DOM 上的 .view.active 保持同步，避免 device_list 每秒刷时反复 dispatch。
+  let activeView = "home";
+  // 已知设备 id。只有「没见过的新设备」才算连接事件 ——
+  // 每次 device_list 都跳会把用户从设置页反复踢走。
+  let knownDeviceIds = new Set();
   let ws = null;
   let wantConnect = false;
   let retry = null;
@@ -48,6 +54,7 @@
 
   // ----------------- 导航切换 -----------------
   function switchView(name) {
+    activeView = name;
     document.querySelectorAll(".nav-item").forEach((b) => {
       b.classList.toggle("active", b.dataset.view === name);
     });
@@ -292,6 +299,8 @@
       $("set-cleanup-enabled").checked = c.auto_cleanup !== false;
       $("set-cleanup-max").value = c.cleanup_max_mb || 2048;
       $("set-cleanup-days").value = c.cleanup_days || 10;
+      // 老配置文件没有该字段 → 后端已按默认 true 补上，这里再兜一层
+      $("set-auto-jump").checked = c.auto_jump_on_connect !== false;
       syncCleanupFields();
     }
     try {
@@ -378,6 +387,25 @@
     const ds = await safe("get_devices");
     if (ds) renderDevices(ds);
   }
+
+  /// 有新设备连上时，按设置自动切到「传输」页。
+  ///
+  /// 三个前置条件缺一不可：
+  ///   1. 设置里开着「设备连接后自动跳到传输页」（未加载到配置时按默认开启处理）；
+  ///   2. 当前不在传输页 —— 已经在看传输页就别再 dispatch 了；
+  ///   3. 出现了**没见过**的设备 id。轮询/广播每次都会推全量列表，
+  ///      只有新增才是真正的「有人连上来」。
+  ///
+  /// 无论跳不跳，都要把已知 id 更新掉，否则关掉开关时新增设备会被反复判定为新。
+  function maybeAutoJump(list) {
+    const hasNew = list.some((d) => !knownDeviceIds.has(d.id));
+    knownDeviceIds = new Set(list.map((d) => d.id));
+    if (!hasNew) return;
+    if (cfg.auto_jump_on_connect === false) return;
+    if (activeView === "devices") return;
+    switchView("devices");
+  }
+
   function renderDevices(list) {
     const box = $("device-list");
     box.innerHTML = "";
@@ -1051,6 +1079,7 @@
     const auto_cleanup = $("set-cleanup-enabled").checked;
     const cleanup_max_mb = parseInt($("set-cleanup-max").value, 10);
     const cleanup_days = parseInt($("set-cleanup-days").value, 10);
+    const auto_jump_on_connect = $("set-auto-jump").checked;
     const msg = $("settings-msg");
 
     // 校验不过时不落盘，只在卡片下方说明原因
@@ -1080,6 +1109,7 @@
         autoCleanup: auto_cleanup,
         cleanupMaxMb: cleanup_max_mb,
         cleanupDays: cleanup_days,
+        autoJumpOnConnect: auto_jump_on_connect,
       });
       msg.textContent = "";
       flashSaved();
@@ -1125,7 +1155,7 @@
   // 也会让每次按键都触发一次校验失败提示。
   $("set-pwd").addEventListener("change", scheduleSave);
   // 勾选 / 数字框：change 时立即保存（含清理字段的启用状态）
-  ["set-cleanup-enabled", "set-cleanup-max", "set-cleanup-days"].forEach((id) => {
+  ["set-cleanup-enabled", "set-cleanup-max", "set-cleanup-days", "set-auto-jump"].forEach((id) => {
     const el = $(id);
     if (el) el.addEventListener("change", scheduleSave);
   });
@@ -1183,6 +1213,9 @@
             hostPassword = m.password || hostPassword;
             serverPort = m.port || serverPort;
             renderPwd();
+            // 初次握手只登记现有设备：这时列表里的人都已在连接状态，
+            // 不该因为「面板刚打开」就跳一次
+            knownDeviceIds = new Set((m.devices || []).map((d) => d.id));
             renderDevices(m.devices || []);
             sessionFiles = m.files || [];
             historyFiles = m.history || m.files || [];
@@ -1191,9 +1224,12 @@
             if (typeof m.text === "string") applyRemoteText(m.text);
           }
           break;
-        case "device_list":
-          renderDevices(m.devices || []);
+        case "device_list": {
+          const list = m.devices || [];
+          maybeAutoJump(list);
+          renderDevices(list);
           break;
+        }
         case "file_list":
           sessionFiles = m.files || [];
           historyFiles = m.history || m.files || [];

@@ -41,6 +41,10 @@ pub struct Config {
     /// 只删除超过该天数的文件（默认 10 天）；未超过则保留，等下次启动再判断
     #[serde(default = "default_cleanup_days")]
     pub cleanup_days: u64,
+    /// 有设备连上时自动切到「传输」页。
+    /// 默认开启；关掉后用户停在哪个页面就留在哪个页面（老行为）。
+    #[serde(default = "default_auto_jump_on_connect")]
+    pub auto_jump_on_connect: bool,
 }
 
 #[derive(Serialize, Clone)]
@@ -320,6 +324,7 @@ impl AppState {
         auto_cleanup: bool,
         cleanup_max_mb: u64,
         cleanup_days: u64,
+        auto_jump_on_connect: bool,
     ) -> Result<(), String> {
         if password.len() != 6 || !password.chars().all(|c| c.is_ascii_digit()) {
             return Err("连接密码必须是 6 位数字".into());
@@ -343,6 +348,7 @@ impl AppState {
             cfg.auto_cleanup = auto_cleanup;
             cfg.cleanup_max_mb = cleanup_max_mb;
             cfg.cleanup_days = cleanup_days;
+            cfg.auto_jump_on_connect = auto_jump_on_connect;
             let p = PathBuf::from(&storage_dir);
             if p.is_absolute() {
                 // 目录不存在则创建（失败时忽略，上传阶段会再次确保并报错）
@@ -457,6 +463,21 @@ fn should_migrate_storage(stored: &std::path::Path, download: Option<&std::path:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn config_defaults_auto_jump_when_field_missing() {
+        // 老版本配置文件里没有 auto_jump_on_connect，读出来必须是「开启」，
+        // 否则升级后用户会遇到「明明设置里打勾了却存在文件里是 false」的诡异状态
+        let old = r#"{"port":18765,"password":"123456","storage_dir":"C:/tmp","auto_start":true}"#;
+        let c: Config = serde_json::from_str(old).unwrap();
+        assert!(c.auto_jump_on_connect, "老配置缺字段时应默认开启");
+        assert!(c.auto_cleanup, "顺带确认其余默认值没被带偏");
+
+        // 显式关闭必须能被读回来（否则用户在设置里关不掉）
+        let off = r#"{"port":18765,"password":"123456","storage_dir":"C:/tmp","auto_start":true,"auto_jump_on_connect":false}"#;
+        let c2: Config = serde_json::from_str(off).unwrap();
+        assert!(!c2.auto_jump_on_connect);
+    }
 
     #[test]
     fn storage_prefers_os_downloads_dir() {
@@ -860,6 +881,10 @@ fn default_cleanup_max_mb() -> u64 {
 fn default_cleanup_days() -> u64 {
     10
 }
+/// 老版本配置文件里没有这个字段，读到就按「开启」处理（与产品默认一致）。
+fn default_auto_jump_on_connect() -> bool {
+    true
+}
 
 fn load_config() -> Config {
     let p = config_dir().join("config.json");
@@ -891,6 +916,7 @@ fn load_config() -> Config {
         auto_cleanup: default_auto_cleanup(),
         cleanup_max_mb: default_cleanup_max_mb(),
         cleanup_days: default_cleanup_days(),
+        auto_jump_on_connect: default_auto_jump_on_connect(),
     }
 }
 
